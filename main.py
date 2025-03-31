@@ -31,8 +31,23 @@ def init_log(results_path, log_level="INFO"):
     log.getLogger().addHandler(fh)
 
     log.info("Logging initialized successfully.")
+    log.info(f"Results will be saved to: {results_path}")
 
-    return log
+    return log, results_path
+
+#######################################################################
+# Time tracking decorator
+#######################################################################
+def timing_decorator(func):
+    """Decorator to measure and log execution time of functions"""
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        log.info(f"Function {func.__name__} took {elapsed_time:.2f} seconds to execute")
+        return result, elapsed_time
+    return wrapper
 
 #######################################################################
 # Classes
