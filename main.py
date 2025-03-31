@@ -1192,16 +1192,7 @@ def main():
             logger.info(f"Raw survivor counts saved to {data_path}")
         except Exception as e:
             logger.error(f"Error saving raw data: {str(e)}")
-    
-    # Copy the script to the results directory for reproducibility
-    try:
-        script_path = os.path.abspath(__file__)
-        script_copy = os.path.join(args.results_path, os.path.basename(script_path))
-        shutil.copy2(script_path, script_copy)
-        logger.info(f"Script copied to results directory for reproducibility: {script_copy}")
-    except Exception as e:
-        logger.warning(f"Could not copy script to results directory: {str(e)}")
-    
+        
     # Record and log total execution time
     end_time = time.time()
     total_execution_time = end_time - start_time
