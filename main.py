@@ -53,30 +53,59 @@ def timing_decorator(func):
 # Classes
 #######################################################################
 class Organism:
-    N_GENES = 10  # Default, overridden in main
+    N_GENES = 1  # Default value, will be overridden by command line arg
     P_MUTATION = 0.1  # Default, overridden in main
-
+    
     def __init__(self, genome=None, id=None):
         if genome is not None:
             self.genome = genome
         else:
-            self.genome = np.random.randint(0, 2, Organism.N_GENES)
+            # Initialize with non-resistant genome (all zeros)
+            self.genome = np.zeros(Organism.N_GENES, dtype=int)
         
-        self.id = id if id is not None else uuid.uuid4()
+        # Only generate UUID if explicitly needed to reduce overhead
+        self.id = id if id is not None else None
+        
+        # For tracking if this organism is resistant (first gene determines resistance)
+        self.is_resistant = bool(self.genome[0])
 
     def __repr__(self):
-        return f"Organism {self.id} with genome {self.genome}"
+        if self.id is None:
+            self.id = uuid.uuid4()
+        status = "Resistant" if self.is_resistant else "Sensitive"
+        return f"Organism {self.id}: {status}"
 
-    def mutate(self):
+    def mutate(self, mutation_rate=None):
+        """Apply random mutations to the genome based on mutation probability"""
+        rate = mutation_rate if mutation_rate is not None else Organism.P_MUTATION
+        
+        # Check for mutations in each gene
         for i in range(Organism.N_GENES):
-            if np.random.rand() < Organism.P_MUTATION:
+            if np.random.rand() < rate:
                 self.genome[i] = 1 - self.genome[i]  # Flip bit
+        
+        # Update resistance status (always determined by first gene)
+        self.is_resistant = bool(self.genome[0])
+        return self
 
-    def reproduce(self):
+    def reproduce(self, mutation_rate=None):
+        """Create an offspring with possible mutations"""
         offspring = Organism(genome=self.genome.copy())
-        offspring.mutate()
+        if mutation_rate is not None:
+            offspring.mutate(mutation_rate)
+        else:
+            offspring.mutate()
         return offspring
 
+    @property
+    def resistance_gene(self):
+        """Get the value of the resistance gene"""
+        return self.genome[0]
+        
+    @property
+    def gene_count(self):
+        """Get number of genes that are turned on (value=1)"""
+        return np.sum(self.genome)
 
 #######################################################################
 # Simulation_execution_functions
