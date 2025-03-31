@@ -4,20 +4,28 @@ import argparse
 import os
 import sys
 import logging as log
+from tqdm import tqdm
+from datetime import datetime
+import shutil
+import time 
+import cProfile
+import pstats
+import multiprocessing as mp
+from functools import partial
 
 #######################################################################
 # Setup logging
 #######################################################################
-def init_log(Resu_path, log_level="INFO"):
+def init_log(results_path, log_level="INFO"):
     """Initialize logging with specified log level"""
     # Set log level
     level = getattr(log, log_level.upper(), log.INFO)
-    
+
     # Initialize logging
     log.basicConfig(level=level, format='%(asctime)s - %(name)s - %(levelname)s - %(lineno)d - %(message)s')
     
     # Add file handler
-    path = os.path.join(Resu_path, 'Assignment_Introduction_Luria_Delbrook.log')
+    path = os.path.join(results_path, 'Assignment_Introduction_Luria_Delbrook.log')
     fh = log.FileHandler(path, mode='w')
     fh.setLevel(level)
     log.getLogger().addHandler(fh)
