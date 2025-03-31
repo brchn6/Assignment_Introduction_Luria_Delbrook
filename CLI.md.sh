@@ -1,10 +1,10 @@
-(sexy_yeast_env) 07:47:10 🖤 barc@cn769:~ > py /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/main.py --model random --num_cultures 1 --initial_population_size 10 --num_generations 2 --mutation_rate 0.01 --Results_path /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/Results --log_level INFO  --optimize_numpy --help
+(sexy_yeast_env) 11:17:57 🖤 barc@cn124:~ > python /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/main.py --model all --num_cultures 1000 --initial_population_size 50 --num_generations 3 --mutation_rate 0.001 --induced_mutation_rate 0.05 --Results_path /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/Results --log_level INFO --use_parallel --help
 usage: main.py [-h] [--model {random,induced,combined,all}] [--num_cultures NUM_CULTURES]
                [--initial_population_size INITIAL_POPULATION_SIZE] [--num_generations NUM_GENERATIONS]
                [--mutation_rate MUTATION_RATE] [--induced_mutation_rate INDUCED_MUTATION_RATE]
                [--n_genes N_GENES] [--Results_path RESULTS_PATH]
                [--log_level {DEBUG,INFO,WARNING,ERROR,CRITICAL}] [--use_parallel]
-               [--n_processes N_PROCESSES] [--profile] [--optimize_numpy]
+               [--n_processes N_PROCESSES] [--profile] [--optimize_numpy] [--optimal_ld]
 
 Luria–Delbrück Simulation: Random vs. Induced vs. Combined
 
@@ -32,8 +32,9 @@ options:
                         Number of processes to use (default: CPU count - 1)
   --profile             Run with profiling to identify bottlenecks
   --optimize_numpy      Use numpy vectorization where possible
+  --optimal_ld          Use optimal parameters for Luria-Delbrück demonstration
 
-
+  
 
 
 py /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/main.py --model random --num_cultures 6 --initial_population_size 1000 --num_generations 4 --mutation_rate 0.01 --Results_path /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/Results --log_level INFO
@@ -49,3 +50,8 @@ bsub -q short -R rusage[mem=100GB] python /home/labs/pilpel/barc/Evolutionthroug
 bsub -q short -R rusage[mem=100GB] python /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/main.py --model random --num_cultures 64 --initial_population_size 1000 --num_generations 100 --mutation_rate 0.01 --Results_path /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/Results --log_level INFO --use_parallel --optimize_numpy --n_processes 10 --n_genes 1
 bsub -q short -R rusage[mem=100GB] python /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/main.py --model all --num_cultures    64 --initial_population_size 1000 --num_generations 10 --mutation_rate 0.01 --Results_path /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/Results --log_level INFO --use_parallel --optimize_numpy --n_processes 10 --n_genes 1
 bsub -q short -R rusage[mem=100GB] python /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/main.py --model all --num_cultures    64 --initial_population_size 1000 --num_generations 100 --mutation_rate 0.01 --Results_path /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/Results --log_level INFO --use_parallel --optimize_numpy --n_processes 10 --n_genes 1
+
+
+
+py '/home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/src/GUI.py'
+
