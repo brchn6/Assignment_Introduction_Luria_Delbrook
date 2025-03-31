@@ -35,6 +35,25 @@ def init_log(results_path, log_level="INFO"):
 
     return log, results_path
 
+def _get_lsf_job_details() -> list[str]:
+    """
+    Retrieves environment variables for LSF job details, if available.
+    """
+    lsf_job_id = os.environ.get('LSB_JOBID')    # Job ID
+    lsf_queue = os.environ.get('LSB_QUEUE')     # Queue name
+    lsf_host = os.environ.get('LSB_HOSTS')      # Hosts allocated
+    lsf_job_name = os.environ.get('LSB_JOBNAME')  # Job name
+    lsf_command = os.environ.get('LSB_CMD')     # Command used to submit job
+
+    details = [
+        f"LSF Job ID: {lsf_job_id}",
+        f"LSF Queue: {lsf_queue}",
+        f"LSF Hosts: {lsf_host}",
+        f"LSF Job Name: {lsf_job_name}",
+        f"LSF Command: {lsf_command}"
+    ]
+    return details
+
 #######################################################################
 # Time tracking decorator
 #######################################################################
@@ -1554,6 +1573,14 @@ def main():
 
     # Initialize logging with timestamp subfolder
     logger, args.results_path = init_log(subdir, args.log_level)
+
+    # apply _get_lsf_job_details to get the job details
+    job_details = _get_lsf_job_details()
+    if job_details:
+        # log the job details
+        logger.info(f"Job details: {job_details}")
+    else:
+        logger.info("Job details not found")
     
     # Log simulation parameters
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1636,7 +1663,7 @@ def main():
             
             # Try to use the new visualization functions if they exist
             try:
-                create_improved_visualizations(survivors_list, args.model, args.results_path)
+                create_visualizations(survivors_list, args.model, args.results_path)
             except Exception as e:
                 logger.warning(f"Could not create improved visualizations: {str(e)}")
             
@@ -1763,7 +1790,7 @@ def main():
         
         # Try to use the new visualization functions if they exist
         try:
-            improved_vis_path, improved_vis_time = create_improved_visualizations(survivors_list, args.model, args.results_path)
+            improved_vis_path, improved_vis_time = create_visualizations(survivors_list, args.model, args.results_path)
             print(f"Improved Luria-Delbrück visualizations saved to: {improved_vis_path}")
         except Exception as e:
             logger.warning(f"Could not create improved visualizations: {str(e)}")
