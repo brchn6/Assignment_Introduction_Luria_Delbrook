@@ -13,6 +13,9 @@ import pstats
 import multiprocessing as mp
 from functools import partial
 
+# Helper function needed for the improved visualization
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 #######################################################################
 # Setup logging
 #######################################################################
@@ -597,74 +600,153 @@ def create_visualizations(survivors_list, model_name, results_path):
 
 @timing_decorator
 def create_comparison_visualization(results_dict, results_path):
-    """Create comparison visualizations for all models."""
+    """Create clearer comparison visualizations for all models."""
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns
+        import numpy as np
+        from matplotlib.gridspec import GridSpec
         
         # Set style for better visualizations
-        sns.set_style("whitegrid")
+        plt.style.use('seaborn-v0_8-whitegrid')
+        plt.rcParams['font.size'] = 12
+        plt.rcParams['axes.titlesize'] = 14
+        plt.rcParams['axes.labelsize'] = 12
         
         # Get model names and their corresponding data
         model_names = list(results_dict.keys())
         
-        # Create figure and axes
-        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-        fig.suptitle("Luria-Delbrück Experiment: Model Comparison", fontsize=16)
+        # Create figure with custom grid layout
+        fig = plt.figure(figsize=(16, 14))
+        gs = GridSpec(2, 2, figure=fig)
         
-        # 1. Histogram comparison
-        for model in model_names:
-            sns.histplot(results_dict[model], 
-                         kde=True, 
-                         label=model.capitalize(),
-                         alpha=0.5,
-                         ax=axes[0, 0])
-        axes[0, 0].set_xlabel("Number of Resistant Survivors")
-        axes[0, 0].set_ylabel("Frequency")
-        axes[0, 0].set_title("Distribution Comparison")
-        axes[0, 0].legend()
+        # 1. Distribution comparison with separate y-axes (top left)
+        ax1 = fig.add_subplot(gs[0, 0])
         
-        # 2. Box plot comparison
-        data_for_boxplot = []
-        labels_for_boxplot = []
-        for model in model_names:
-            data_for_boxplot.append(results_dict[model])
-            labels_for_boxplot.append(model.capitalize())
+        colors = {'random': 'royalblue', 'induced': 'firebrick', 'combined': 'forestgreen'}
+        model_display_names = {'random': 'Random', 'induced': 'Induced', 'combined': 'Combined'}
         
-        axes[0, 1].boxplot(data_for_boxplot, 
-                         vert=True, 
-                         patch_artist=True,
-                         labels=labels_for_boxplot)
-        axes[0, 1].set_ylabel("Number of Resistant Survivors")
-        axes[0, 1].set_title("Box Plot Comparison")
+        # Use kernel density estimation with different scales for each model
+        for i, model in enumerate(model_names):
+            # Create a twin y-axis for each additional model
+            if i == 0:
+                curr_ax = ax1
+            else:
+                curr_ax = ax1.twinx()
+                # Offset the right spine for multiple twin axes
+                if i > 1:
+                    curr_ax.spines['right'].set_position(('outward', 60 * (i-1)))
+            
+            # Plot the density curve
+            sns.kdeplot(results_dict[model], ax=curr_ax, color=colors[model], 
+                       label=model_display_names[model], linewidth=2.5)
+            
+            # Set y-label with matching color
+            curr_ax.set_ylabel(f"{model_display_names[model]} Density", color=colors[model])
+            curr_ax.tick_params(axis='y', colors=colors[model])
         
-        # 3. Coefficient of Variation Comparison
-        cv_values = []
+        # Set common x label
+        ax1.set_xlabel("Number of Resistant Survivors")
+        ax1.set_title("Distribution Comparison (Separate Scales)", fontweight='bold')
+        
+        # Add legends for all models
+        lines, labels = [], []
+        for ax in [ax1] + ([ax for ax in fig.axes if ax != ax1 and ax.bbox.bounds[1] > 0.5]):
+            line, label = ax.get_legend_handles_labels()
+            lines.extend(line)
+            labels.extend(label)
+        ax1.legend(lines, labels, loc='upper right')
+        
+        # 2. Box plot comparison with log scale (top right)
+        ax2 = fig.add_subplot(gs[0, 1])
+        
+        # Prepare data for boxplot
+        data_for_boxplot = [results_dict[model] for model in model_names]
+        box_colors = [colors[model] for model in model_names]
+        
+        # Create boxplot with customized appearance
+        boxplots = ax2.boxplot(data_for_boxplot, 
+                            vert=True, 
+                            patch_artist=True,
+                            labels=[model_display_names[m] for m in model_names],
+                            showfliers=False)  # Hide outliers for cleaner display
+        
+        # Customize boxplot colors
+        for patch, color in zip(boxplots['boxes'], box_colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+        
+        # Set log scale if range is large
+        ranges = [max(data) - min(data) for data in data_for_boxplot]
+        if max(ranges) / min(ranges) > 100:
+            ax2.set_yscale('log')
+            ax2.set_title("Box Plot Comparison (Log Scale)", fontweight='bold')
+        else:
+            ax2.set_title("Box Plot Comparison", fontweight='bold')
+            
+        ax2.set_ylabel("Number of Resistant Survivors")
+        ax2.grid(True, axis='y', alpha=0.3)
+        
+        # 3. Variance-to-Mean Ratio Comparison (bottom left)
+        ax3 = fig.add_subplot(gs[1, 0])
+        
+        # Calculate VMR for each model
+        vmr_values = []
         for model in model_names:
             survivors = results_dict[model]
             mean = np.mean(survivors)
-            std = np.std(survivors)
-            cv = std / mean if mean > 0 else 0
-            cv_values.append(cv)
+            var = np.var(survivors)
+            vmr = var / mean if mean > 0 else 0
+            vmr_values.append(vmr)
         
-        bars = axes[1, 0].bar(model_names, cv_values, color=['royalblue', 'forestgreen', 'darkorange'])
-        axes[1, 0].set_xlabel("Model")
-        axes[1, 0].set_ylabel("Coefficient of Variation")
-        axes[1, 0].set_title("Coefficient of Variation Comparison")
+        # Create bar chart with custom colors
+        bars = ax3.bar([model_display_names[m] for m in model_names], vmr_values, 
+                       color=[colors[m] for m in model_names], alpha=0.7, edgecolor='black')
+        
+        # Determine if log scale is needed
+        if max(vmr_values) / (min(vmr_values) + 0.001) > 100:
+            ax3.set_yscale('log')
+            ax3.set_title("Variance-to-Mean Ratio (Log Scale)", fontweight='bold')
+        else:
+            ax3.set_title("Variance-to-Mean Ratio Comparison", fontweight='bold')
+            
+        ax3.set_xlabel("Model")
+        ax3.set_ylabel("Variance-to-Mean Ratio")
         
         # Add values on top of bars
         for bar in bars:
             height = bar.get_height()
-            axes[1, 0].text(bar.get_x() + bar.get_width()/2., height + 0.02,
-                    f'{height:.2f}', ha='center', va='bottom')
+            if height > 0:
+                if ax3.get_yscale() == 'log':
+                    y_pos = height * 1.1
+                else:
+                    y_pos = height + max(vmr_values) * 0.02
+                ax3.text(bar.get_x() + bar.get_width()/2., y_pos,
+                       f'{height:.2f}', ha='center', va='bottom')
         
-        # 4. Summary statistics table
-        axes[1, 1].axis('tight')
-        axes[1, 1].axis('off')
+        # Add Luria-Delbrück reference line and annotation
+        ax3.axhline(y=1, color='gray', linestyle='--', alpha=0.7)
+        ax3.text(0.02, 0.02, "VMR ≈ 1 for Poisson distribution (expected for induced mutations)\nVMR > 1 supports Luria-Delbrück hypothesis", 
+                transform=ax3.transAxes, fontsize=10, verticalalignment='bottom',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        
+        # 4. Summary statistics table (bottom right)
+        ax4 = fig.add_subplot(gs[1, 1])
+        ax4.axis('tight')
+        ax4.axis('off')
         
         # Create table data
         stats = []
-        headers = ["Statistic"] + [m.capitalize() for m in model_names]
+        headers = ["Statistic"] + [model_display_names[m] for m in model_names]
+        
+        # Calculate coefficient of variation for highlighting
+        cv_values = []
+        for model in model_names:
+            data = results_dict[model]
+            mean = np.mean(data)
+            std = np.std(data)
+            cv = std / mean if mean > 0 else 0
+            cv_values.append(cv)
         
         # Add rows of statistics
         stats.append(["Mean"] + [f"{np.mean(results_dict[m]):.2f}" for m in model_names])
@@ -673,21 +755,92 @@ def create_comparison_visualization(results_dict, results_path):
         stats.append(["Median"] + [f"{np.median(results_dict[m]):.2f}" for m in model_names])
         stats.append(["Max"] + [f"{np.max(results_dict[m])}" for m in model_names])
         stats.append(["CV"] + [f"{cv_values[i]:.2f}" for i in range(len(model_names))])
+        stats.append(["VMR"] + [f"{vmr_values[i]:.2f}" for i in range(len(model_names))])
         stats.append(["Zero Count"] + [f"{sum(1 for x in results_dict[m] if x == 0)}" for m in model_names])
         
-        table = axes[1, 1].table(cellText=stats, colLabels=headers, loc='center', cellLoc='center')
+        # Create the table with custom coloring
+        table = ax4.table(cellText=stats, colLabels=headers, loc='center', cellLoc='center')
         table.auto_set_font_size(False)
-        table.set_fontsize(10)
+        table.set_fontsize(11)
         table.scale(1, 1.5)
         
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        # Highlight cells for better readability
+        for i in range(len(stats)):
+            for j in range(len(model_names) + 1):
+                cell = table[(i+1, j)]
+                
+                # Shade header cells
+                if i == -1 or j == 0:
+                    cell.set_facecolor('#D8D8D8')
+                    cell.set_text_props(weight='bold')
+                
+                # Highlight the model with highest CV (key for Luria-Delbrück)
+                if i == 5 and j > 0:  # CV row
+                    model_idx = j - 1
+                    if cv_values[model_idx] == max(cv_values):
+                        cell.set_facecolor('#BBFFBB')
+                
+                # Highlight VMR values greater than 1 (supporting Luria-Delbrück)
+                if i == 6 and j > 0:  # VMR row
+                    model_idx = j - 1
+                    if vmr_values[model_idx] > 1:
+                        cell.set_facecolor('#BBFFBB')
+                    elif vmr_values[model_idx] < 1.1 and vmr_values[model_idx] > 0.9:
+                        cell.set_facecolor('#FFFFBB')  # Yellow for values close to 1 (Poisson-like)
+        
+        # Add a title for the table
+        ax4.set_title("Summary Statistics", fontweight='bold')
+        
+        # Add an explanation of the key findings
+        if 'random' in model_names and 'induced' in model_names:
+            random_idx = model_names.index('random')
+            induced_idx = model_names.index('induced')
+            
+            if vmr_values[random_idx] > vmr_values[induced_idx]:
+                conclusion = "The Random model shows higher variance-to-mean ratio than the Induced model, supporting the Luria-Delbrück hypothesis."
+            else:
+                conclusion = "Results are inconclusive: expected the Random model to show higher variance-to-mean ratio than the Induced model."
+                
+            ax4.text(0.5, 0.02, conclusion, transform=ax4.transAxes, 
+                    fontsize=11, ha='center', va='bottom', 
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        plt.tight_layout()
         
         # Save the figure
         save_path = os.path.join(results_path, "model_comparison.png")
-        plt.savefig(save_path, dpi=300)
-        log.info(f"Comparison visualization saved to {save_path}")
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
         
-        plt.close()
+        # Create a dedicated histogram comparison figure
+        plt.figure(figsize=(15, 10))
+        
+        # Use facet grid for clearer multi-model histogram comparison
+        if len(model_names) > 1:
+            # Prepare data for facet grid
+            all_data = []
+            for model in model_names:
+                model_data = results_dict[model]
+                model_df = pd.DataFrame({
+                    'survivors': model_data,
+                    'model': model_display_names[model]
+                })
+                all_data.append(model_df)
+            
+            combined_df = pd.concat(all_data)
+            
+            # Create facet grid of histograms
+            g = sns.FacetGrid(combined_df, col="model", height=4, aspect=1.2,
+                             sharex=False, sharey=False)
+            g.map_dataframe(sns.histplot, x="survivors", kde=True)
+            g.set_axis_labels("Number of Resistant Survivors", "Frequency")
+            g.set_titles("{col} Model")
+            g.tight_layout()
+            
+            # Save histogram comparison
+            hist_path = os.path.join(results_path, "histogram_comparison.png")
+            plt.savefig(hist_path, dpi=300, bbox_inches='tight')
+        
+        plt.close('all')
         
         return save_path
     except ImportError as e:
@@ -695,6 +848,8 @@ def create_comparison_visualization(results_dict, results_path):
         return None
     except Exception as e:
         log.error(f"Error creating comparison visualizations: {str(e)}")
+        import traceback
+        log.error(traceback.format_exc())
         return None
 
 #######################################################################
@@ -893,87 +1048,209 @@ def run_all_models(args):
     return results, stats, elapsed_times
 
 def create_visualizations(survivors_list, model_name, results_path):
-    """Create improved visualizations specifically for Luria-Delbrück analysis"""
+    """Create improved visualizations specifically for Luria-Delbrück analysis for individual models"""
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns
         import numpy as np
+        from matplotlib.gridspec import GridSpec
         
         # Set style for better visualizations
-        sns.set_style("whitegrid")
+        plt.style.use('seaborn-v0_8-whitegrid')
+        plt.rcParams['font.size'] = 12
+        plt.rcParams['axes.titlesize'] = 14
+        plt.rcParams['axes.labelsize'] = 12
         
-        # Create figure
-        plt.figure(figsize=(15, 12))
+        # Create figure with custom layout
+        fig = plt.figure(figsize=(16, 14))
+        gs = GridSpec(2, 2, figure=fig)
         
-        # 1. Standard histogram (top left)
-        plt.subplot(2, 2, 1)
-        plt.hist(survivors_list, bins='auto', alpha=0.7, color='royalblue')
-        plt.xlabel("Number of Resistant Survivors")
-        plt.ylabel("Frequency")
-        plt.title(f"{model_name.capitalize()} Model: Distribution of Resistant Survivors")
+        # Color scheme based on model
+        model_colors = {
+            'random': 'royalblue', 
+            'induced': 'firebrick', 
+            'combined': 'forestgreen'
+        }
+        color = model_colors.get(model_name, 'purple')
+        
+        # Calculate key statistics for annotations
+        mean_val = np.mean(survivors_list)
+        var_val = np.var(survivors_list)
+        std_val = np.std(survivors_list)
+        cv_val = std_val / mean_val if mean_val > 0 else 0
+        vmr_val = var_val / mean_val if mean_val > 0 else 0
+        
+        # 1. Standard histogram with KDE (top left)
+        ax1 = fig.add_subplot(gs[0, 0])
+        sns.histplot(survivors_list, kde=True, ax=ax1, color=color, alpha=0.7, edgecolor='k')
+        ax1.set_xlabel("Number of Resistant Survivors")
+        ax1.set_ylabel("Frequency")
+        ax1.set_title(f"{model_name.capitalize()} Model: Distribution of Resistant Survivors", fontweight='bold')
+        
+        # Add statistics annotation
+        stats_text = f"Mean: {mean_val:.2f}\nStd Dev: {std_val:.2f}\nCV: {cv_val:.2f}\nVMR: {vmr_val:.2f}"
+        ax1.text(0.02, 0.95, stats_text, transform=ax1.transAxes, 
+                fontsize=11, verticalalignment='top', 
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
         
         # 2. Log-scale histogram - KEY for Luria-Delbrück (top right)
-        plt.subplot(2, 2, 2)
+        ax2 = fig.add_subplot(gs[0, 1])
+        
         if max(survivors_list) > 0:
-            # Add a small value to handle zeros when using log scale
-            nonzero_data = [x + 0.1 for x in survivors_list]
-            bins = np.logspace(np.log10(0.1), np.log10(max(nonzero_data)), 20)
-            plt.hist(nonzero_data, bins=bins, alpha=0.7, color='forestgreen')
-            plt.xscale('log')
-            plt.xlabel("Number of Resistant Survivors (log scale)")
-            plt.ylabel("Frequency")
-            plt.title("Log-Scale Distribution")
+            # Handle zeros for log scale properly
+            nonzero_data = [x for x in survivors_list if x > 0]
+            if len(nonzero_data) > 0:
+                # Add a small value for log binning to work
+                nonzero_data = [x + 0.1 for x in nonzero_data]
+                min_val = min(nonzero_data)
+                max_val = max(nonzero_data)
+                
+                # Create log-spaced bins
+                bins = np.logspace(np.log10(min_val), np.log10(max_val), 30)
+                
+                # Plot the histogram
+                ax2.hist(nonzero_data, bins=bins, alpha=0.7, color=color, edgecolor='k')
+                ax2.set_xscale('log')
+                ax2.set_xlabel("Number of Resistant Survivors (log scale)")
+                ax2.set_ylabel("Frequency")
+                ax2.set_title("Log-Scale Distribution", fontweight='bold')
+                
+                # Add note explaining log scale
+                ax2.text(0.02, 0.02, "Note: Log scale helps visualize\nskewed distributions", 
+                        transform=ax2.transAxes, fontsize=10, verticalalignment='bottom',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+                
+                # For random model, add note about Luria-Delbrück signature
+                if model_name == 'random' and vmr_val > 1:
+                    ax2.text(0.98, 0.98, "Wide spread on log scale is\ncharacteristic of Luria-Delbrück\ndistribution", 
+                            transform=ax2.transAxes, fontsize=10, ha='right', va='top',
+                            bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
         
         # 3. CCDF plot (bottom left) - Excellent for showing power-law type distributions
-        plt.subplot(2, 2, 3)
+        ax3 = fig.add_subplot(gs[1, 0])
         sorted_data = np.sort(survivors_list)
         ccdf = 1 - np.arange(1, len(sorted_data) + 1) / len(sorted_data)
-        plt.step(sorted_data, ccdf, where='post', color='darkorange')
-        plt.xscale('log')
-        plt.yscale('log')
-        plt.xlabel("Number of Resistant Survivors (log scale)")
-        plt.ylabel("P(X > x) (log scale)")
-        plt.title("Complementary Cumulative Distribution Function")
-        plt.grid(True, which="both", ls="-", alpha=0.2)
         
-        # 4. Probability density function with fit (bottom right)
-        plt.subplot(2, 2, 4)
-        sns.kdeplot(survivors_list, color='purple')
-        plt.xlabel("Number of Resistant Survivors")
-        plt.ylabel("Probability Density")
-        plt.title("Probability Density Function")
+        # Plot with thicker line and markers for better visibility
+        ax3.step(sorted_data, ccdf, where='post', color=color, linewidth=2.5)
+        ax3.set_xscale('log')
+        ax3.set_yscale('log')
+        ax3.set_xlabel("Number of Resistant Survivors (log scale)")
+        ax3.set_ylabel("P(X > x) (log scale)")
+        ax3.set_title("Complementary Cumulative Distribution Function", fontweight='bold')
+        ax3.grid(True, which="both", ls="-", alpha=0.2)
         
-        plt.tight_layout()
-        save_path = os.path.join(results_path, f"luria_delbrueck_analysis_{model_name}.png")
-        plt.savefig(save_path, dpi=300)
-        plt.close()
-        
-        # Create a second figure specifically for model comparison if comparing random vs induced
-        if model_name in ["random", "induced"]:
-            # Create a special figure showing theoretical distributions
-            plt.figure(figsize=(10, 6))
+        # Add note on CCDF interpretation
+        if model_name == 'random':
+            note = "A straight line on log-log CCDF plot\nindicates a power-law-like distribution,\ncharacteristic of Luria-Delbrück"
+        elif model_name == 'induced':
+            note = "Curved line on log-log CCDF plot\nis characteristic of Poisson-like distributions\nexpected for induced mutations"
+        else:
+            note = "CCDF shape reveals distribution characteristics:\nStraight line = power-law-like (Luria-Delbrück)\nCurved line = Poisson-like"
             
+        ax3.text(0.02, 0.02, note, transform=ax3.transAxes, fontsize=10, verticalalignment='bottom',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        
+        # 4. Theoretical comparison for specific models (bottom right)
+        ax4 = fig.add_subplot(gs[1, 1])
+        
+        if model_name in ["random", "induced"]:
             # Generate theoretical data for comparison
             if model_name == "random":
-                # Simulate Luria-Delbrück distribution (simplified)
-                # Using log-normal as an approximation
-                theoretical_data = np.random.lognormal(0, 1, size=1000)
-                plt.title("Random Mutation Model vs. Theoretical Luria-Delbrück Distribution")
+                # Use log-normal as an approximation to Luria-Delbrück distribution
+                mean_log, sigma_log = 0, 1  # Parameters can be adjusted
+                theoretical_data = np.random.lognormal(mean_log, sigma_log, size=10000)
+                # Scale to match mean of empirical data
+                scaling_factor = mean_val / np.mean(theoretical_data)
+                theoretical_data = theoretical_data * scaling_factor
+                
+                ax4.set_title("Random Model vs. Theoretical Luria-Delbrück", fontweight='bold')
+                note = "Luria-Delbrück distributions are characterized by:\n- High variance-to-mean ratio (VMR > 1)\n- Long right tail ('jackpot' events)\n- Similar to log-normal shape"
             else:
                 # Simulate Poisson distribution for induced model
-                theoretical_data = np.random.poisson(np.mean(survivors_list), size=1000)
-                plt.title("Induced Mutation Model vs. Theoretical Poisson Distribution")
+                theoretical_data = np.random.poisson(mean_val, size=10000)
+                ax4.set_title("Induced Model vs. Theoretical Poisson", fontweight='bold')
+                note = "Poisson distributions are characterized by:\n- VMR ≈ 1\n- More symmetrical distribution\n- More predictable outcomes"
             
-            # Plot both empirical and theoretical distributions
-            sns.kdeplot(survivors_list, color='blue', label="Simulation data")
-            sns.kdeplot(theoretical_data, color='red', label="Theoretical distribution")
-            plt.xlabel("Number of Resistant Survivors")
-            plt.ylabel("Probability Density")
-            plt.legend()
+            # Plot both distributions using KDE for smoother visualization
+            sns.kdeplot(survivors_list, ax=ax4, color=color, linewidth=2.5, label="Simulation data")
+            sns.kdeplot(theoretical_data, ax=ax4, color='gray', linewidth=2, linestyle='--', label="Theoretical distribution")
             
-            theory_path = os.path.join(results_path, f"theoretical_comparison_{model_name}.png")
-            plt.savefig(theory_path, dpi=300)
-            plt.close()
+            # Set axis labels
+            ax4.set_xlabel("Number of Resistant Survivors")
+            ax4.set_ylabel("Probability Density")
+            ax4.legend(loc='best')
+            
+            # Add note on theoretical comparison
+            ax4.text(0.02, 0.02, note, transform=ax4.transAxes, fontsize=10, verticalalignment='bottom',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            
+            # Show VMR comparison
+            theo_vmr = np.var(theoretical_data) / np.mean(theoretical_data)
+            vmr_text = f"VMR Comparison:\n- Empirical: {vmr_val:.2f}\n- Theoretical: {theo_vmr:.2f}"
+            ax4.text(0.98, 0.98, vmr_text, transform=ax4.transAxes, fontsize=10, 
+                    ha='right', va='top', bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
+        else:
+            # For combined model, show histogram with density curve
+            sns.histplot(survivors_list, kde=True, ax=ax4, color=color, alpha=0.6, edgecolor='k')
+            ax4.set_xlabel("Number of Resistant Survivors")
+            ax4.set_ylabel("Frequency")
+            ax4.set_title("Combined Model Distribution", fontweight='bold')
+            
+            # Calculate quartiles for additional stats
+            q1, median, q3 = np.percentile(survivors_list, [25, 50, 75])
+            iqr = q3 - q1
+            
+            # Add detailed stats
+            stats_text = (f"Distribution Statistics:\n"
+                        f"- Mean: {mean_val:.2f}\n"
+                        f"- Median: {median:.2f}\n"
+                        f"- 1st Quartile: {q1:.2f}\n"
+                        f"- 3rd Quartile: {q3:.2f}\n"
+                        f"- IQR: {iqr:.2f}\n"
+                        f"- VMR: {vmr_val:.2f}")
+            ax4.text(0.98, 0.98, stats_text, transform=ax4.transAxes, fontsize=10, 
+                    ha='right', va='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        
+        plt.tight_layout()
+        save_path = os.path.join(results_path, f"improved_analysis_{model_name}.png")
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Create a specialized log-scale plot for better visualization of skewness
+        plt.figure(figsize=(10, 8))
+        
+        # For random model, focus on log-log CCDF which best shows Luria-Delbrück characteristics
+        if model_name == "random":
+            plt.step(sorted_data, ccdf, where='post', color=color, linewidth=3)
+            plt.xscale('log')
+            plt.yscale('log')
+            plt.xlabel("Number of Resistant Survivors (log scale)")
+            plt.ylabel("P(X > x) (log scale)")
+            plt.title("Random Model: Log-Log CCDF Plot", fontweight='bold')
+            plt.grid(True, which="both", ls="-", alpha=0.3)
+            
+            # Add annotation explaining significance
+            plt.figtext(0.5, 0.01, 
+                        "A straight line on this log-log plot indicates a power-law-like distribution,\n"
+                        "which is a key signature of the Luria-Delbrück experiment showing spontaneous mutations.",
+                        ha='center', fontsize=11, bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
+        else:
+            # For other models, show log-scale histogram
+            nonzero_data = [x + 0.1 for x in survivors_list if x > 0]
+            if len(nonzero_data) > 0:
+                bins = np.logspace(np.log10(min(nonzero_data)), np.log10(max(nonzero_data)), 30)
+                plt.hist(nonzero_data, bins=bins, alpha=0.7, color=color, edgecolor='k')
+                plt.xscale('log')
+                plt.xlabel("Number of Resistant Survivors (log scale)")
+                plt.ylabel("Frequency")
+                plt.title(f"{model_name.capitalize()} Model: Log-Scale Histogram", fontweight='bold')
+                plt.grid(True, which="both", ls="-", alpha=0.3)
+        
+        plt.tight_layout()
+        log_save_path = os.path.join(results_path, f"log_scale_analysis_{model_name}.png")
+        plt.savefig(log_save_path, dpi=300, bbox_inches='tight')
+        plt.close()
         
         return save_path, 0  # Return path and time = 0 (timing handled by decorator)
         
@@ -982,14 +1259,17 @@ def create_visualizations(survivors_list, model_name, results_path):
         return None, 0
     except Exception as e:
         log.error(f"Error creating improved visualizations: {str(e)}")
+        import traceback
+        log.error(traceback.format_exc())
         return None, 0
-
+        
 def create_luria_delbrueck_comparison(results_dict, results_path):
-    """Create specialized visualizations comparing random vs induced models"""
+    """Create specialized visualizations comparing random vs induced models with improved clarity"""
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns
         import numpy as np
+        from matplotlib.gridspec import GridSpec
         
         if 'random' not in results_dict or 'induced' not in results_dict:
             return None, 0
@@ -997,11 +1277,18 @@ def create_luria_delbrueck_comparison(results_dict, results_path):
         random_data = results_dict['random']
         induced_data = results_dict['induced']
         
-        # Create figure
-        plt.figure(figsize=(15, 10))
+        # Set the style for better aesthetics
+        plt.style.use('seaborn-v0_8-whitegrid')
+        plt.rcParams['font.size'] = 12
+        plt.rcParams['axes.titlesize'] = 14
+        plt.rcParams['axes.labelsize'] = 12
         
-        # 1. CCDF Comparison - most informative plot
-        plt.subplot(2, 2, 1)
+        # Create figure with custom grid layout
+        fig = plt.figure(figsize=(16, 14))
+        gs = GridSpec(2, 2, figure=fig)
+        
+        # 1. CCDF Comparison - most informative plot (top left)
+        ax1 = fig.add_subplot(gs[0, 0])
         
         # Process random data
         sorted_random = np.sort(random_data)
@@ -1011,91 +1298,183 @@ def create_luria_delbrueck_comparison(results_dict, results_path):
         sorted_induced = np.sort(induced_data)
         ccdf_induced = 1 - np.arange(1, len(sorted_induced) + 1) / len(sorted_induced)
         
-        # Plot both on same axes
-        plt.step(sorted_random, ccdf_random, where='post', color='blue', 
-                label='Random (Darwinian) Model')
-        plt.step(sorted_induced, ccdf_induced, where='post', color='red', 
-                label='Induced (Lamarckian) Model')
+        # Plot both on same axes with thicker lines and markers for better visibility
+        ax1.step(sorted_random, ccdf_random, where='post', color='blue', 
+                label='Random (Darwinian) Model', linewidth=2.5)
+        ax1.step(sorted_induced, ccdf_induced, where='post', color='red', 
+                label='Induced (Lamarckian) Model', linewidth=2.5, linestyle='--')
         
-        plt.xscale('log')
-        plt.yscale('log')
-        plt.xlabel("Number of Resistant Survivors (log scale)")
-        plt.ylabel("P(X > x) (log scale)")
-        plt.title("Complementary Cumulative Distribution Function")
-        plt.legend()
-        plt.grid(True, which="both", ls="-", alpha=0.2)
+        ax1.set_xscale('log')
+        ax1.set_yscale('log')
+        ax1.set_xlabel("Number of Resistant Survivors (log scale)")
+        ax1.set_ylabel("P(X > x) (log scale)")
+        ax1.set_title("Complementary Cumulative Distribution Function", fontweight='bold')
+        ax1.legend(loc='best', frameon=True, fancybox=True, shadow=True)
+        ax1.grid(True, which="both", ls="-", alpha=0.2)
         
-        # 2. PDF Comparison
-        plt.subplot(2, 2, 2)
-        sns.kdeplot(random_data, color='blue', label="Random Model")
-        sns.kdeplot(induced_data, color='red', label="Induced Model")
-        plt.xlabel("Number of Resistant Survivors")
-        plt.ylabel("Probability Density")
-        plt.title("Probability Density Functions")
-        plt.legend()
+        # 2. Separate PDF plots for better visibility (top right)
+        ax2 = fig.add_subplot(gs[0, 1])
         
-        # 3. Log-scale histograms
-        plt.subplot(2, 2, 3)
+        # Create two separate subplots within this area
+        divider = make_axes_locatable(ax2)
+        ax2_random = ax2
+        ax2_induced = divider.append_axes("bottom", size="40%", pad=0.6)
         
-        # Handle zeros for log scale
-        nonzero_random = [x + 0.1 for x in random_data]
-        nonzero_induced = [x + 0.1 for x in induced_data]
+        # Plot Random model PDF
+        sns.kdeplot(random_data, ax=ax2_random, color='blue', linewidth=2.5, label="Random Model")
+        ax2_random.set_xlabel("")  # Remove xlabel as it will be on the bottom subplot
+        ax2_random.set_ylabel("Probability Density")
+        ax2_random.set_title("Probability Density Functions (Separate Scales)", fontweight='bold')
+        ax2_random.legend(loc='upper right')
+        ax2_random.grid(True, alpha=0.3)
         
-        max_value = max(max(nonzero_random), max(nonzero_induced))
-        bins = np.logspace(np.log10(0.1), np.log10(max_value), 20)
+        # Plot Induced model PDF
+        sns.kdeplot(induced_data, ax=ax2_induced, color='red', linewidth=2.5, label="Induced Model")
+        ax2_induced.set_xlabel("Number of Resistant Survivors")
+        ax2_induced.set_ylabel("Probability Density")
+        ax2_induced.legend(loc='upper right')
+        ax2_induced.grid(True, alpha=0.3)
         
-        plt.hist(nonzero_random, bins=bins, alpha=0.5, color='blue', label="Random Model")
-        plt.hist(nonzero_induced, bins=bins, alpha=0.5, color='red', label="Induced Model")
-        plt.xscale('log')
-        plt.xlabel("Number of Resistant Survivors (log scale)")
-        plt.ylabel("Frequency")
-        plt.title("Log-Scale Distribution Comparison")
-        plt.legend()
+        # 3. Separate histograms with appropriate scales (bottom left)
+        ax3 = fig.add_subplot(gs[1, 0])
         
-        # 4. Key statistics in a text box
-        plt.subplot(2, 2, 4)
-        plt.axis('off')
+        # Create separate subplot areas
+        divider = make_axes_locatable(ax3)
+        ax3_random = ax3
+        ax3_induced = divider.append_axes("right", size="30%", pad=0.6)
+        
+        # Plot Random model histogram
+        ax3_random.hist(random_data, bins=30, alpha=0.7, color='blue', edgecolor='black')
+        ax3_random.set_xlabel("Number of Resistant Survivors")
+        ax3_random.set_ylabel("Frequency")
+        ax3_random.set_title("Histograms (Separate Scales)", fontweight='bold')
+        ax3_random.text(0.05, 0.95, "Random Model", transform=ax3_random.transAxes, 
+                 fontsize=12, fontweight='bold', verticalalignment='top', 
+                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+        
+        # Plot Induced model histogram
+        ax3_induced.hist(induced_data, bins=30, alpha=0.7, color='red', edgecolor='black')
+        ax3_induced.set_xlabel("Number")
+        ax3_induced.set_ylabel("")  # No ylabel on right plot
+        ax3_induced.text(0.05, 0.95, "Induced Model", transform=ax3_induced.transAxes, 
+                 fontsize=12, fontweight='bold', verticalalignment='top', 
+                 bbox=dict(boxstyle='round', facecolor='mistyrose', alpha=0.5))
+        
+        # 4. Key statistics in a styled text box (bottom right)
+        ax4 = fig.add_subplot(gs[1, 1])
+        ax4.axis('off')
         
         # Calculate statistics for both distributions
         random_mean = np.mean(random_data)
         random_var = np.var(random_data)
-        random_cv = np.std(random_data) / random_mean if random_mean > 0 else 0
+        random_std = np.std(random_data)
+        random_cv = random_std / random_mean if random_mean > 0 else 0
+        random_vmr = random_var / random_mean if random_mean > 0 else 0
         
         induced_mean = np.mean(induced_data)
         induced_var = np.var(induced_data)
-        induced_cv = np.std(induced_data) / induced_mean if induced_mean > 0 else 0
+        induced_std = np.std(induced_data)
+        induced_cv = induced_std / induced_mean if induced_mean > 0 else 0
+        induced_vmr = induced_var / induced_mean if induced_mean > 0 else 0
+        
+        # Create VMR comparison bar chart
+        divider = make_axes_locatable(ax4)
+        ax4_chart = divider.append_axes("bottom", size="40%", pad=0.2)
+        
+        models = ['Random', 'Induced']
+        vmr_values = [random_vmr, induced_vmr]
+        colors = ['blue', 'red']
+        
+        bars = ax4_chart.bar(models, vmr_values, color=colors, alpha=0.7, edgecolor='black')
+        ax4_chart.set_yscale('log')  # Log scale for better comparison with high disparity
+        ax4_chart.set_ylabel('VMR (log scale)')
+        ax4_chart.set_title('Variance-to-Mean Ratio Comparison', fontweight='bold')
+        
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            ax4_chart.text(bar.get_x() + bar.get_width()/2., height * 1.1,
+                   f'{height:.2f}', ha='center', va='bottom', rotation=0,
+                   fontweight='bold')
         
         # Create a text summary
-        text = f"""
-        Luria-Delbrück Analysis Results:
+        text = f
+        """
+        LURIA-DELBRUECK ANALYSIS RESULTS:
         
-        Random (Darwinian) Model:
-        - Mean: {random_mean:.2f}
-        - Variance: {random_var:.2f}
-        - Coefficient of Variation: {random_cv:.2f}
-        - Zero resistant cultures: {sum(1 for x in random_data if x == 0)} 
+        RANDOM (DARWINIAN) MODEL:
+        * Mean: {random_mean:.2f}
+        * Standard Deviation: {random_std:.2f} 
+        * Variance: {random_var:.2f}
+        * Coefficient of Variation: {random_cv:.2f}
+        * Variance-to-Mean Ratio: {random_vmr:.2f}
+        * Zero resistant cultures: {sum(1 for x in random_data if x == 0)} 
         
-        Induced (Lamarckian) Model:
-        - Mean: {induced_mean:.2f}
-        - Variance: {induced_var:.2f}
-        - Coefficient of Variation: {induced_cv:.2f}
-        - Zero resistant cultures: {sum(1 for x in induced_data if x == 0)}
+        INDUCED (LAMARCKIAN) MODEL:
+        * Mean: {induced_mean:.2f}
+        * Standard Deviation: {induced_std:.2f}
+        * Variance: {induced_var:.2f}
+        * Coefficient of Variation: {induced_cv:.2f}
+        * Variance-to-Mean Ratio: {induced_vmr:.2f}
+        * Zero resistant cultures: {sum(1 for x in induced_data if x == 0)}
         
-        Key Finding: {'Random model has higher variance (supporting Luria-Delbrück)' 
-                    if random_cv > induced_cv else 'Results inconclusive'}
+        KEY FINDING: {'Random model has higher variance (supporting Luria-Delbrueck)' 
+                    if random_vmr > induced_vmr else 'Results inconclusive'}
         
-        Variance-to-Mean Ratio:
-        - Random Model: {random_var/random_mean:.2f}
-        - Induced Model: {induced_var/induced_mean:.2f}
+        RATIO COMPARISON:
+        * Random/Induced VMR Ratio: {random_vmr/induced_vmr:.2f}
+        * Random/Induced CV Ratio: {random_cv/induced_cv:.2f}
         """
         
-        plt.text(0.05, 0.95, text, transform=plt.gca().transAxes, 
-                fontsize=10, verticalalignment='top', 
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        # Add styled text box
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+        ax4.text(0.05, 0.95, text, transform=ax4.transAxes, 
+                fontsize=11, verticalalignment='top', 
+                bbox=props, linespacing=1.5)
         
         plt.tight_layout()
         save_path = os.path.join(results_path, "luria_delbrueck_direct_comparison.png")
-        plt.savefig(save_path, dpi=300)
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Create a second figure for log-scale comparisons
+        fig2 = plt.figure(figsize=(12, 10))
+        
+        # Log-scale histogram comparison
+        ax1 = fig2.add_subplot(111)
+        
+        # Handle zeros for log scale
+        nonzero_random = [x + 0.1 for x in random_data if x > 0]
+        nonzero_induced = [x + 0.1 for x in induced_data if x > 0]
+        
+        max_value = max(max(nonzero_random), max(nonzero_induced))
+        min_value = min(min(nonzero_random), min(nonzero_induced))
+        
+        bins = np.logspace(np.log10(min_value), np.log10(max_value), 30)
+        
+        ax1.hist(nonzero_random, bins=bins, alpha=0.5, color='blue', label="Random Model")
+        ax1.hist(nonzero_induced, bins=bins, alpha=0.5, color='red', label="Induced Model")
+        ax1.set_xscale('log')
+        ax1.set_xlabel("Number of Resistant Survivors (log scale)")
+        ax1.set_ylabel("Frequency")
+        ax1.set_title("Log-Scale Distribution Comparison", fontweight='bold')
+        ax1.legend(loc='upper left')
+        ax1.grid(True, which="both", alpha=0.3)
+        
+        # Add annotation explaining the log scale
+        explanation = """
+                    Note: This plot uses logarithmic scaling on the x-axis to better
+                    display the distributions when they have very different ranges.
+                    The Random (Darwinian) model typically shows a wider spread.
+                    """
+        
+        ax1.text(0.02, 0.02, explanation, transform=ax1.transAxes,
+                fontsize=10, verticalalignment='bottom',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        
+        plt.tight_layout()
+        log_save_path = os.path.join(results_path, "luria_delbrueck_log_comparison.png")
+        plt.savefig(log_save_path, dpi=300, bbox_inches='tight')
         plt.close()
         
         return save_path, 0
@@ -1104,6 +1483,8 @@ def create_luria_delbrueck_comparison(results_dict, results_path):
         return None, 0
     except Exception as e:
         log.error(f"Error creating comparison visualizations: {str(e)}")
+        import traceback
+        log.error(traceback.format_exc())
         return None, 0
 
 def create_luria_delbrueck_report(stats, results, args, results_path):
