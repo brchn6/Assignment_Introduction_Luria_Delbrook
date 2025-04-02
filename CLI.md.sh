@@ -60,7 +60,10 @@ bsub -q short -R rusage[mem=100GB] python /home/labs/pilpel/barc/Evolutionthroug
 bsub -q short -R rusage[mem=200GB] python /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/src/main.py --model all --num_cultures 30 --initial_population_size 25 --num_generations 30 --mutation_rate 0.01 --induced_mutation_rate 0.01 --Results_path /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/Results --log_level INFO --use_parallel --optimize_numpy --n_genes 5
 bsub -q short -R rusage[mem=200GB] python /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/src/main.py --model all --num_cultures 30 --initial_population_size 25 --num_generations 30 --mutation_rate 0.01 --induced_mutation_rate 0.01 --Results_path /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/Results --log_level INFO --use_parallel --optimize_numpy --n_genes 1
 
-
+bsub -q short -R rusage[mem=200GB] python /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/src/main.py --model all --num_cultures 333000 --initial_population_size 100 --num_generations 7 --mutation_rate 0.01 --induced_mutation_rate 0.01 --Results_path /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/Results --log_level INFO --use_parallel --optimize_numpy --n_genes 10
 
 
 python /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/src/main.py --model all --num_cultures  101 --initial_population_size 100 --num_generations 3 --mutation_rate 0.01 --induced_mutation_rate 0.01 --Results_path /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/Results --log_level INFO --use_parallel --optimize_numpy --n_genes 1
+
+
+python /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/src/main.py --model all --num_cultures 30 --initial_population_size 100 --num_generations 5 --mutation_rate 0.01 --induced_mutation_rate 0.01 --Results_path /home/labs/pilpel/barc/Evolutionthroughprogramming_2025/Assignment_Introduction_Luria_Delbrook/Results --log_level INFO --use_parallel --optimize_numpy --n_genes 100
