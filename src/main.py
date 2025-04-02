@@ -1,3 +1,10 @@
+"""
+Main script for running the Luria-Delbrück simulation with different mutation models.
+path : ./Assignment_Introduction_Luria_Delbrook/src/main.py
+# Description: Main script for running the Luria-Delbrück simulation.
+
+"""
+
 import numpy as np
 import uuid
 import argparse 
