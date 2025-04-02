@@ -69,8 +69,14 @@ def timing_decorator(func):
         end_time = time.time()
         elapsed_time = end_time - start_time
         log.info(f"Function {func.__name__} took {elapsed_time:.2f} seconds to execute")
-        return result, elapsed_time
+        
+        # If the result is already a tuple, we need to handle it properly
+        if isinstance(result, tuple):
+            return result  # Return the original tuple without wrapping it
+        else:
+            return result, elapsed_time  # Wrap single result with elapsed time
     return wrapper
+
 
 #######################################################################
 # Classes
@@ -368,14 +374,15 @@ def analyze_results(survivors_list, model_name):
     return results
 
 #######################################################################
-# Visualization Functions
+# Enhanced Visualization Functions
 #######################################################################
 @timing_decorator
 def create_visualizations(survivors_list, model_name, results_path):
-    """Create visualizations of the simulation results."""
+    """Create enhanced visualizations of the simulation results."""
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns
+        from scipy import stats
         
         # Set style for better visualizations
         sns.set_style("whitegrid")
@@ -384,92 +391,243 @@ def create_visualizations(survivors_list, model_name, results_path):
         # 1. Standard histogram (top left)
         plt.subplot(2, 2, 1)
         plt.hist(survivors_list, bins='auto', alpha=0.7, color='royalblue')
-        plt.xlabel("Number of Resistant Survivors")
-        plt.ylabel("Frequency")
-        plt.title(f"{model_name.capitalize()} Model: Distribution of Resistant Survivors")
+        plt.xlabel("Number of Resistant Survivors", fontsize=12)
+        plt.ylabel("Frequency", fontsize=12)
+        plt.title(f"{model_name.capitalize()} Model: Distribution of Resistant Survivors", fontsize=14)
+        
+        # Calculate key statistics for annotations
+        mean_val = np.mean(survivors_list)
+        var_val = np.var(survivors_list)
+        vmr_val = var_val / mean_val if mean_val > 0 else 0
+        
+        # Add statistics annotation
+        stats_text = f"Mean: {mean_val:.2f}\nVariance: {var_val:.2f}\nVMR: {vmr_val:.2f}"
+        plt.annotate(stats_text, xy=(0.02, 0.95), xycoords='axes fraction', 
+                   fontsize=10, verticalalignment='top', 
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
         
         # 2. Log-scale histogram - KEY for Luria-Delbrück (top right)
         plt.subplot(2, 2, 2)
         if max(survivors_list) > 0:
-            # Add a small value to handle zeros when using log scale
+            # Handle zeros for log scale
             nonzero_data = [x + 0.1 for x in survivors_list if x > 0]
             if len(nonzero_data) > 0:
                 bins = np.logspace(np.log10(min(nonzero_data)), np.log10(max(nonzero_data)), 20)
                 plt.hist(nonzero_data, bins=bins, alpha=0.7, color='forestgreen')
                 plt.xscale('log')
-                plt.xlabel("Number of Resistant Survivors (log scale)")
-                plt.ylabel("Frequency")
-                plt.title("Log-Scale Distribution")
+                plt.xlabel("Number of Resistant Survivors (log scale)", fontsize=12)
+                plt.ylabel("Frequency", fontsize=12)
+                plt.title("Log-Scale Distribution", fontsize=14)
+                
+                # Add note explaining log scale significance
+                if model_name == "random":
+                    log_note = "Long-tailed distribution on log scale\nis characteristic of Luria-Delbrück effect"
+                elif model_name == "induced":
+                    log_note = "Narrow distribution on log scale\nis characteristic of Poisson distribution"
+                else:
+                    log_note = "Log scale helps visualize distribution shape"
+                    
+                plt.annotate(log_note, xy=(0.02, 0.02), xycoords='axes fraction',
+                           fontsize=10, verticalalignment='bottom',
+                           bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
         
         # 3. CCDF plot (bottom left) - Excellent for showing power-law type distributions
         plt.subplot(2, 2, 3)
         sorted_data = np.sort(survivors_list)
         ccdf = 1 - np.arange(1, len(sorted_data) + 1) / len(sorted_data)
-        plt.step(sorted_data, ccdf, where='post', color='darkorange')
+        plt.step(sorted_data, ccdf, where='post', color='darkorange', linewidth=2)
         plt.xscale('log')
         plt.yscale('log')
-        plt.xlabel("Number of Resistant Survivors (log scale)")
-        plt.ylabel("P(X > x) (log scale)")
-        plt.title("Complementary Cumulative Distribution Function")
+        plt.xlabel("Number of Resistant Survivors (log scale)", fontsize=12)
+        plt.ylabel("P(X > x) (log scale)", fontsize=12)
+        plt.title("Complementary Cumulative Distribution Function", fontsize=14)
         plt.grid(True, which="both", ls="-", alpha=0.2)
         
-        # 4. Probability density function with fit (bottom right)
+        # Add annotation explaining CCDF significance
+        if model_name == "random":
+            ccdf_note = "Straight line on log-log CCDF plot\nindicates power-law behavior\ncharacteristic of Luria-Delbrück"
+        elif model_name == "induced":
+            ccdf_note = "Curved line on log-log CCDF plot\nindicates Poisson-like behavior"
+        else:
+            ccdf_note = "CCDF shape reveals underlying distribution pattern"
+            
+        plt.annotate(ccdf_note, xy=(0.02, 0.02), xycoords='axes fraction',
+                   fontsize=10, verticalalignment='bottom',
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        
+        # 4. Probability density function with theoretical fit (bottom right)
         plt.subplot(2, 2, 4)
-        sns.kdeplot(survivors_list, color='purple', label="Empirical distribution")
-        plt.xlabel("Number of Resistant Survivors")
-        plt.ylabel("Probability Density")
-        plt.title("Probability Density Function")
+        sns.kdeplot(survivors_list, color='purple', label="Empirical distribution", linewidth=2)
+        
+        # Add theoretical distribution
+        if model_name == "random":
+            # Log-normal approximation for Luria-Delbrück
+            nonzero_data = [x for x in survivors_list if x > 0]
+            if len(nonzero_data) > 0:
+                log_data = np.log(nonzero_data)
+                mean_log = np.mean(log_data)
+                sigma_log = np.std(log_data)
+                x = np.linspace(min(survivors_list), max(survivors_list), 1000)
+                try:
+                    pdf_lognormal = stats.lognorm.pdf(x, s=sigma_log, scale=np.exp(mean_log))
+                    plt.plot(x, pdf_lognormal, 'r--', linewidth=2, label='Log-normal approx.')
+                except:
+                    pass  # Skip if there's an error fitting the log-normal
+        elif model_name == "induced":
+            # Poisson approximation
+            mean_val = np.mean(survivors_list)
+            x = np.arange(max(0, int(mean_val) - 20), int(mean_val) + 20)
+            try:
+                pmf_poisson = stats.poisson.pmf(x, mean_val)
+                plt.plot(x, pmf_poisson, 'r--', linewidth=2, label='Poisson approx.')
+            except:
+                pass  # Skip if there's an error fitting the Poisson
+        
+        plt.xlabel("Number of Resistant Survivors", fontsize=12)
+        plt.ylabel("Probability Density", fontsize=12)
+        title = "Probability Density Function"
+        if model_name == "random":
+            title += "\nExpected: Heavy-tailed distribution"
+        elif model_name == "induced":
+            title += "\nExpected: Poisson-like distribution"
+        plt.title(title, fontsize=14)
+        plt.legend()
         
         plt.tight_layout()
         save_path = os.path.join(results_path, f"luria_delbrueck_analysis_{model_name}.png")
         plt.savefig(save_path, dpi=300)
         plt.close()
         
-        # Create a second figure specifically for model comparison if comparing random vs induced
-        if model_name in ["random", "induced"]:
-            # Create a special figure showing theoretical distributions
-            plt.figure(figsize=(10, 6))
+        # Create specialized visualization based on model type
+        plt.figure(figsize=(10, 7))
+        
+        if model_name == "random":
+            # Create a clear visual showing jackpot cultures
+            plt.hist(survivors_list, bins=30, alpha=0.7, color='royalblue')
+            plt.axvline(np.mean(survivors_list), color='red', linestyle='--', linewidth=2,
+                      label=f"Mean = {np.mean(survivors_list):.2f}")
+            plt.axvline(np.median(survivors_list), color='green', linestyle=':', linewidth=2,
+                      label=f"Median = {np.median(survivors_list):.2f}")
             
-            # Generate theoretical data for comparison
-            if model_name == "random":
-                # Simulate Luria-Delbrück distribution (simplified)
-                # Using log-normal as an approximation
-                nonzero_data = [x for x in survivors_list if x > 0]
-                if len(nonzero_data) > 0:
-                    log_data = np.log(nonzero_data)
-                    mean_log = np.mean(log_data)
-                    sigma_log = np.std(log_data)
-                    theoretical_data = np.random.lognormal(mean_log, sigma_log, size=10000)
-                    plt.title("Random Mutation Model vs. Theoretical Luria-Delbrück Distribution")
-            else:
-                # Simulate Poisson distribution for induced model
-                theoretical_data = np.random.poisson(np.mean(survivors_list), size=1000)
-                plt.title("Induced Mutation Model vs. Theoretical Poisson Distribution")
+            # Mark the "jackpot" cultures
+            jackpot_threshold = np.mean(survivors_list) * 2
+            jackpot_count = sum(1 for x in survivors_list if x > jackpot_threshold)
+            jackpot_percent = (jackpot_count / len(survivors_list)) * 100
             
-            # Plot both empirical and theoretical distributions
-            sns.kdeplot(survivors_list, color='blue', label="Simulation data")
-            sns.kdeplot(theoretical_data, color='red', label="Theoretical distribution")
-            plt.xlabel("Number of Resistant Survivors")
-            plt.ylabel("Probability Density")
+            plt.axvline(jackpot_threshold, color='orange', linestyle='-', linewidth=2,
+                      label=f"Jackpot threshold")
+            
+            plt.xlabel("Number of Resistant Survivors", fontsize=14)
+            plt.ylabel("Frequency", fontsize=14)
+            plt.title(f"Random Model: Jackpot Cultures\n{jackpot_percent:.1f}% of cultures show jackpot effect", fontsize=16)
+            plt.legend()
+            
+            # Add annotation
+            plt.annotate("'Jackpot' cultures are a key signature\nof the Luria-Delbrück experiment", 
+                      xy=(0.98, 0.98), xycoords='axes fraction', fontsize=12,
+                      ha='right', va='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            
+            jackpot_path = os.path.join(results_path, f"jackpot_culture_analysis_{model_name}.png")
+            plt.savefig(jackpot_path, dpi=300)
+            
+        elif model_name == "induced":
+            # Create a visual comparing to Poisson distribution
+            plt.hist(survivors_list, bins=30, alpha=0.7, color='firebrick', density=True, label="Observed data")
+            
+            # Overlay Poisson PMF
+            mean_val = np.mean(survivors_list)
+            x = np.arange(max(0, int(mean_val) - 15), int(mean_val) + 15)
+            try:
+                pmf_poisson = stats.poisson.pmf(x, mean_val)
+                plt.plot(x, pmf_poisson, 'b-', linewidth=3, label=f'Poisson (λ={mean_val:.2f})')
+            except:
+                pass
+                
+            plt.xlabel("Number of Resistant Survivors", fontsize=14)
+            plt.ylabel("Probability", fontsize=14)
+            plt.title(f"Induced Model: Poisson-like Distribution\nVMR = {vmr_val:.2f} (expected: ≈1 for Poisson)", fontsize=16)
+            plt.legend()
+            
+            # Add annotation
+            plt.annotate("Poisson-like distribution indicates\nmutations occur only in response to selection", 
+                      xy=(0.98, 0.98), xycoords='axes fraction', fontsize=12,
+                      ha='right', va='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            
+            poisson_path = os.path.join(results_path, f"poisson_comparison_{model_name}.png")
+            plt.savefig(poisson_path, dpi=300)
+        
+        plt.close()
+        
+        # Create a comparison with theoretical distributions
+        plt.figure(figsize=(10, 6))
+        
+        # Generate theoretical data for appropriate comparison
+        if model_name == "random":
+            # For random model: compare with log-normal approximation
+            nonzero_data = [x for x in survivors_list if x > 0]
+            if len(nonzero_data) > 0:
+                log_data = np.log(nonzero_data)
+                mean_log = np.mean(log_data)
+                sigma_log = np.std(log_data)
+                theoretical_data = np.random.lognormal(mean_log, sigma_log, size=10000)
+                plt.title("Random Model vs. Log-normal Distribution\n(approximation of Luria-Delbrück)", fontsize=16)
+        elif model_name == "induced":
+            # For induced model: compare with Poisson distribution
+            theoretical_data = np.random.poisson(np.mean(survivors_list), size=10000)
+            plt.title("Induced Model vs. Poisson Distribution", fontsize=16)
+        else:
+            # For combined model: show the actual distribution
+            sns.kdeplot(survivors_list, color='green', linewidth=3, label="Combined Model")
+            plt.title("Combined Model Distribution", fontsize=16)
+            plt.xlabel("Number of Resistant Survivors", fontsize=14)
+            plt.ylabel("Probability Density", fontsize=14)
             plt.legend()
             
             theory_path = os.path.join(results_path, f"theoretical_comparison_{model_name}.png")
             plt.savefig(theory_path, dpi=300)
             plt.close()
+            return save_path
+        
+        # Plot both empirical and theoretical distributions
+        sns.kdeplot(survivors_list, color='blue', linewidth=3, label=f"{model_name.capitalize()} Model")
+        sns.kdeplot(theoretical_data, color='red', linewidth=2, linestyle='--', label="Theoretical Distribution")
+        plt.xlabel("Number of Resistant Survivors", fontsize=14)
+        plt.ylabel("Probability Density", fontsize=14)
+        plt.legend()
+        
+        # Add annotation explaining the significance
+        if model_name == "random":
+            plt.annotate("Heavy-tailed distributions are expected for\nspontaneous mutations (Luria-Delbrück hypothesis)", 
+                       xy=(0.02, 0.02), xycoords='axes fraction', fontsize=12,
+                       ha='left', va='bottom', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        elif model_name == "induced":
+            plt.annotate("Poisson-like distributions are expected for\ninduced mutations (variance ≈ mean)", 
+                       xy=(0.02, 0.02), xycoords='axes fraction', fontsize=12,
+                       ha='left', va='bottom', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        
+        theory_path = os.path.join(results_path, f"theoretical_comparison_{model_name}.png")
+        plt.savefig(theory_path, dpi=300)
+        plt.close()
         
         return save_path
         
     except ImportError as e:
         log.warning(f"Visualization libraries not available: {e}")
         return None
+    except Exception as e:
+        log.error(f"Error creating visualizations: {str(e)}")
+        import traceback
+        log.error(traceback.format_exc())
+        return None
 
 @timing_decorator
 def create_comparison_visualization(results_dict, results_path):
-    """Create comparison visualizations for all models."""
+    """Create enhanced comparison visualizations for all models."""
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns
         from matplotlib.gridspec import GridSpec
+        from scipy import stats
         
         # Set style for better visualizations
         plt.style.use('seaborn-v0_8-whitegrid')
@@ -480,207 +638,274 @@ def create_comparison_visualization(results_dict, results_path):
         # Get model names and their corresponding data
         model_names = list(results_dict.keys())
         
+        # Calculate key statistics for all models
+        stats_dict = {}
+        for model in model_names:
+            data = results_dict[model]
+            mean_val = np.mean(data)
+            var_val = np.var(data)
+            std_val = np.std(data)
+            vmr_val = var_val / mean_val if mean_val > 0 else 0
+            cv_val = std_val / mean_val if mean_val > 0 else 0
+            
+            stats_dict[model] = {
+                'mean': mean_val,
+                'variance': var_val,
+                'std_dev': std_val,
+                'vmr': vmr_val,
+                'cv': cv_val
+            }
+        
         # Create figure with custom grid layout
         fig = plt.figure(figsize=(16, 14))
         gs = GridSpec(2, 2, figure=fig)
         
-        # 1. Distribution comparison with separate y-axes (top left)
-        ax1 = fig.add_subplot(gs[0, 0])
-        
+        # Define colors and display names
         colors = {'random': 'royalblue', 'induced': 'firebrick', 'combined': 'forestgreen'}
         model_display_names = {'random': 'Random', 'induced': 'Induced', 'combined': 'Combined'}
         
-        # Use kernel density estimation with different scales for each model
-        for i, model in enumerate(model_names):
-            # Create a twin y-axis for each additional model
-            if i == 0:
-                curr_ax = ax1
-            else:
-                curr_ax = ax1.twinx()
-                # Offset the right spine for multiple twin axes
-                if i > 1:
-                    curr_ax.spines['right'].set_position(('outward', 60 * (i-1)))
+        # 1. DIRECT COMPARISON PLOT (top left) - Shows actual distributions on same scale
+        ax1 = fig.add_subplot(gs[0, 0])
+        
+        for model in model_names:
+            # Use kernel density estimation for smooth distributions
+            sns.kdeplot(results_dict[model], ax=ax1, color=colors[model], 
+                      label=f"{model_display_names[model]} (VMR={stats_dict[model]['vmr']:.2f})", 
+                      linewidth=2.5)
+        
+        # Set common labels and title
+        ax1.set_xlabel("Number of Resistant Survivors", fontsize=12)
+        ax1.set_ylabel("Density", fontsize=12)
+        ax1.set_title("Distribution Comparison (Same Scale)", fontweight='bold', fontsize=14)
+        ax1.legend(loc='best')
+        
+        # Add vertical lines at means
+        for model in model_names:
+            ax1.axvline(stats_dict[model]['mean'], color=colors[model], linestyle='--', alpha=0.7)
             
-            # Plot the density curve
-            sns.kdeplot(results_dict[model], ax=curr_ax, color=colors[model], 
-                       label=model_display_names[model], linewidth=2.5)
-            
-            # Set y-label with matching color
-            curr_ax.set_ylabel(f"{model_display_names[model]} Density", color=colors[model])
-            curr_ax.tick_params(axis='y', colors=colors[model])
+        # Add annotation explaining the key difference
+        if 'random' in model_names and 'induced' in model_names:
+            ax1.annotate("Note different scales and shapes:\nRandom model has wider spread\nInduced model is more concentrated", 
+                       xy=(0.02, 0.98), xycoords='axes fraction', fontsize=10,
+                       ha='left', va='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
         
-        # Set common x label
-        ax1.set_xlabel("Number of Resistant Survivors")
-        ax1.set_title("Distribution Comparison (Separate Scales)", fontweight='bold')
-        
-        # Add legends for all models
-        lines, labels = [], []
-        for ax in [ax1] + ([ax for ax in fig.axes if ax != ax1 and ax.bbox.bounds[1] > 0.5]):
-            line, label = ax.get_legend_handles_labels()
-            lines.extend(line)
-            labels.extend(label)
-        ax1.legend(lines, labels, loc='upper right')
-        
-        # 2. Box plot comparison with log scale (top right)
+        # 2. LOG-LOG CCDF PLOT (top right) - Best for showing Luria-Delbrück effect
         ax2 = fig.add_subplot(gs[0, 1])
         
-        # Prepare data for boxplot
-        data_for_boxplot = [results_dict[model] for model in model_names]
-        box_colors = [colors[model] for model in model_names]
-        
-        # Create boxplot with customized appearance
-        boxplots = ax2.boxplot(data_for_boxplot, 
-                            vert=True, 
-                            patch_artist=True,
-                            labels=[model_display_names[m] for m in model_names],
-                            showfliers=False)  # Hide outliers for cleaner display
-        
-        # Customize boxplot colors
-        for patch, color in zip(boxplots['boxes'], box_colors):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.7)
-        
-        # Set log scale if range is large
-        ranges = [max(data) - min(data) for data in data_for_boxplot]
-        if max(ranges) / min(ranges) > 100:
-            ax2.set_yscale('log')
-            ax2.set_title("Box Plot Comparison (Log Scale)", fontweight='bold')
-        else:
-            ax2.set_title("Box Plot Comparison", fontweight='bold')
+        for model in model_names:
+            # Calculate CCDF
+            sorted_data = np.sort(results_dict[model])
+            ccdf = 1 - np.arange(1, len(sorted_data) + 1) / len(sorted_data)
             
-        ax2.set_ylabel("Number of Resistant Survivors")
-        ax2.grid(True, axis='y', alpha=0.3)
+            # Plot on log-log scale
+            ax2.loglog(sorted_data, ccdf, color=colors[model], 
+                     label=f"{model_display_names[model]} Model", linewidth=2.5)
         
-        # 3. Variance-to-Mean Ratio Comparison (bottom left)
+        ax2.set_xlabel("Number of Resistant Survivors (log scale)", fontsize=12)
+        ax2.set_ylabel("P(X > x) (log scale)", fontsize=12)
+        ax2.set_title("Log-Log CCDF Plot - Key for Luria-Delbrück Pattern", fontweight='bold', fontsize=14)
+        ax2.grid(True, which="both", alpha=0.3)
+        ax2.legend(loc='best')
+        
+        # Add annotation explaining the significance
+        ax2.annotate("Straight line indicates power-law behavior\n(characteristic of Luria-Delbrück)\nCurved line indicates Poisson-like behavior", 
+                   xy=(0.02, 0.02), xycoords='axes fraction', fontsize=10,
+                   ha='left', va='bottom', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        
+        # 3. VARIANCE-TO-MEAN RATIO COMPARISON (bottom left) - Critical for hypothesis testing
         ax3 = fig.add_subplot(gs[1, 0])
         
-        # Calculate VMR for each model
-        vmr_values = []
-        for model in model_names:
-            survivors = results_dict[model]
-            mean = np.mean(survivors)
-            var = np.var(survivors)
-            vmr = var / mean if mean > 0 else 0
-            vmr_values.append(vmr)
+        # Extract VMR values
+        vmr_values = [stats_dict[model]['vmr'] for model in model_names]
         
         # Create bar chart with custom colors
         bars = ax3.bar([model_display_names[m] for m in model_names], vmr_values, 
-                       color=[colors[m] for m in model_names], alpha=0.7, edgecolor='black')
+                     color=[colors[m] for m in model_names], alpha=0.7, edgecolor='black', width=0.6)
         
-        # Determine if log scale is needed
-        if max(vmr_values) / (min(vmr_values) + 0.001) > 100:
-            ax3.set_yscale('log')
-            ax3.set_title("Variance-to-Mean Ratio (Log Scale)", fontweight='bold')
-        else:
-            ax3.set_title("Variance-to-Mean Ratio Comparison", fontweight='bold')
-            
-        ax3.set_xlabel("Model")
-        ax3.set_ylabel("Variance-to-Mean Ratio")
+        # Set labels and title
+        ax3.set_xlabel("Model", fontsize=12)
+        ax3.set_ylabel("Variance-to-Mean Ratio (VMR)", fontsize=12)
+        ax3.set_title("Variance-to-Mean Ratio Comparison\nKey Indicator for Luria-Delbrück Effect", 
+                    fontweight='bold', fontsize=14)
+        
+        # Add horizontal reference line at VMR=1 (Poisson expectation)
+        ax3.axhline(y=1, color='black', linestyle='--', alpha=0.7, 
+                  label='Poisson Distribution (VMR = 1)')
         
         # Add values on top of bars
         for bar in bars:
             height = bar.get_height()
             if height > 0:
-                if ax3.get_yscale() == 'log':
-                    y_pos = height * 1.1
-                else:
-                    y_pos = height + max(vmr_values) * 0.02
+                y_pos = height + 0.1
                 ax3.text(bar.get_x() + bar.get_width()/2., y_pos,
-                       f'{height:.2f}', ha='center', va='bottom')
+                       f'{height:.2f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
         
-        # Add Luria-Delbrück reference line and annotation
-        ax3.axhline(y=1, color='gray', linestyle='--', alpha=0.7)
-        ax3.text(0.02, 0.02, "VMR ≈ 1 for Poisson distribution (expected for induced mutations)\nVMR > 1 supports Luria-Delbrück hypothesis", 
-                transform=ax3.transAxes, fontsize=10, verticalalignment='bottom',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        # Customize y-limits for better visualization
+        ax3.set_ylim(0, max(vmr_values) * 1.2)
         
-        # 4. Summary statistics table (bottom right)
+        # Add annotation explaining VMR significance
+        ax3.annotate("VMR ≈ 1: Poisson distribution (expected for induced mutations)\nVMR >> 1: Heavy-tailed distribution (expected for random mutations)", 
+                   xy=(0.5, 0.02), xycoords='axes fraction', fontsize=10, ha='center',
+                   va='bottom', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        
+        # Add legend
+        ax3.legend()
+        
+        # 4. SUMMARY VISUALIZATION (bottom right)
         ax4 = fig.add_subplot(gs[1, 1])
-        ax4.axis('tight')
-        ax4.axis('off')
         
-        # Create table data
-        stats = []
+        # Create table with key statistics
+        stats_rows = []
         headers = ["Statistic"] + [model_display_names[m] for m in model_names]
         
-        # Calculate coefficient of variation for highlighting
-        cv_values = []
-        for model in model_names:
-            data = results_dict[model]
-            mean = np.mean(data)
-            std = np.std(data)
-            cv = std / mean if mean > 0 else 0
-            cv_values.append(cv)
+        # Add rows of key statistics
+        stats_rows.append(["Mean"] + [f"{stats_dict[m]['mean']:.2f}" for m in model_names])
+        stats_rows.append(["Variance"] + [f"{stats_dict[m]['variance']:.2f}" for m in model_names])
+        stats_rows.append(["VMR"] + [f"{stats_dict[m]['vmr']:.2f}" for m in model_names])
         
-        # Add rows of statistics
-        stats.append(["Mean"] + [f"{np.mean(results_dict[m]):.2f}" for m in model_names])
-        stats.append(["Variance"] + [f"{np.var(results_dict[m]):.2f}" for m in model_names])
-        stats.append(["Std Dev"] + [f"{np.std(results_dict[m]):.2f}" for m in model_names])
-        stats.append(["Median"] + [f"{np.median(results_dict[m]):.2f}" for m in model_names])
-        stats.append(["Max"] + [f"{np.max(results_dict[m])}" for m in model_names])
-        stats.append(["CV"] + [f"{cv_values[i]:.2f}" for i in range(len(model_names))])
-        stats.append(["VMR"] + [f"{vmr_values[i]:.2f}" for i in range(len(model_names))])
-        stats.append(["Zero Count"] + [f"{sum(1 for x in results_dict[m] if x == 0)}" for m in model_names])
+        # Calculate ratio between random and induced VMR if both exist
+        if 'random' in model_names and 'induced' in model_names:
+            random_vmr = stats_dict['random']['vmr']
+            induced_vmr = stats_dict['induced']['vmr']
+            vmr_ratio = random_vmr / induced_vmr if induced_vmr > 0 else float('inf')
+            stats_rows.append(["Random/Induced VMR Ratio", f"{vmr_ratio:.2f}", "", ""])
         
-        # Create the table with custom coloring
-        table = ax4.table(cellText=stats, colLabels=headers, loc='center', cellLoc='center')
+        # Create the table
+        table = ax4.table(cellText=stats_rows, colLabels=headers, loc='center', cellLoc='center')
         table.auto_set_font_size(False)
-        table.set_fontsize(11)
-        table.scale(1, 1.5)
+        table.set_fontsize(12)
+        table.scale(1, 1.8)
         
-        # Highlight cells for better readability
-        for i in range(len(stats)):
-            for j in range(len(model_names) + 1):
-                cell = table[(i+1, j)]
-                
-                # Shade header cells
-                if i == -1 or j == 0:
+        # Customize table appearance
+        for i in range(len(stats_rows) + 1):  # +1 for header
+            for j in range(len(headers)):
+                cell = table[(i, j)]
+                # Header row
+                if i == 0:
                     cell.set_facecolor('#D8D8D8')
                     cell.set_text_props(weight='bold')
-                
-                # Highlight the model with highest CV (key for Luria-Delbrück)
-                if i == 5 and j > 0:  # CV row
-                    model_idx = j - 1
-                    if cv_values[model_idx] == max(cv_values):
-                        cell.set_facecolor('#BBFFBB')
-                
-                # Highlight VMR values greater than 1 (supporting Luria-Delbrück)
-                if i == 6 and j > 0:  # VMR row
-                    model_idx = j - 1
-                    if vmr_values[model_idx] > 1:
-                        cell.set_facecolor('#BBFFBB')
-                    elif vmr_values[model_idx] < 1.1 and vmr_values[model_idx] > 0.9:
-                        cell.set_facecolor('#FFFFBB')  # Yellow for values close to 1 (Poisson-like)
+                # First column (statistic names)
+                if j == 0:
+                    cell.set_text_props(weight='bold')
+                # VMR row - highlight values
+                if i == 3:
+                    if j > 0:
+                        model_idx = j - 1
+                        model = model_names[model_idx]
+                        vmr = stats_dict[model]['vmr']
+                        if vmr > 1.1:  # Well above 1 (random mutation)
+                            cell.set_facecolor('#BBFFBB')  # Green
+                        elif 0.9 <= vmr <= 1.1:  # Close to 1 (induced mutation)
+                            cell.set_facecolor('#FFFFBB')  # Yellow
         
-        # Add a title for the table
-        ax4.set_title("Summary Statistics", fontweight='bold')
+        # Hide axes for table
+        ax4.axis('off')
+        ax4.set_title("Key Statistics", fontweight='bold', fontsize=14)
         
-        # Add an explanation of the key findings
-        if 'random' in model_names and 'induced' in model_names:
-            random_idx = model_names.index('random')
-            induced_idx = model_names.index('induced')
+        # Add conclusion based on results
+        if 'random' in stats_dict and 'induced' in stats_dict:
+            random_vmr = stats_dict['random']['vmr']
+            induced_vmr = stats_dict['induced']['vmr']
             
-            if vmr_values[random_idx] > vmr_values[induced_idx]:
-                conclusion = "The Random model shows higher variance-to-mean ratio than the Induced model, supporting the Luria-Delbrück hypothesis."
+            if random_vmr > induced_vmr * 1.5:
+                conclusion = "CONCLUSION: The Random model shows significantly higher VMR than the Induced model,\nstrongly supporting the Luria-Delbrück hypothesis of spontaneous mutations."
+                color = 'green'
+            elif random_vmr > induced_vmr:
+                conclusion = "CONCLUSION: The Random model shows moderately higher VMR than the Induced model,\nsupporting the Luria-Delbrück hypothesis of spontaneous mutations."
+                color = 'darkgreen'
             else:
-                conclusion = "Results are inconclusive: expected the Random model to show higher variance-to-mean ratio than the Induced model."
+                conclusion = "CONCLUSION: Results inconclusive - Random model VMR is not higher than Induced model VMR.\nConsider adjusting simulation parameters to better demonstrate the Luria-Delbrück effect."
+                color = 'red'
                 
-            ax4.text(0.5, 0.02, conclusion, transform=ax4.transAxes, 
-                    fontsize=11, ha='center', va='bottom', 
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            ax4.annotate(conclusion, xy=(0.5, 0.05), xycoords='axes fraction', fontsize=12,
+                       ha='center', va='bottom', color=color, weight='bold',
+                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
         
         plt.tight_layout()
         
-        # Save the figure
-        save_path = os.path.join(results_path, "model_comparison.png")
+        # Save the overall comparison figure
+        save_path = os.path.join(results_path, "enhanced_model_comparison.png")
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
         
-        # Create a dedicated histogram comparison figure
-        plt.figure(figsize=(15, 10))
+        # Create additional specialized comparison plots
         
-        # Use facet grid for clearer multi-model histogram comparison
+        # 1. DIRECT COMPARISON IN SINGLE PLOT
+        plt.figure(figsize=(10, 7))
+        
+        for model in model_names:
+            sns.kdeplot(results_dict[model], color=colors[model], 
+                      label=f"{model_display_names[model]} (VMR={stats_dict[model]['vmr']:.2f})",
+                      linewidth=2.5)
+        
+        plt.xlabel("Number of Resistant Survivors", fontsize=14)
+        plt.ylabel("Density", fontsize=14)
+        plt.title("Distribution Comparison of Mutation Models", fontsize=16, fontweight='bold')
+        plt.grid(True, alpha=0.3)
+        plt.legend(fontsize=12)
+        
+        # Add vertical lines at means
+        for model in model_names:
+            plt.axvline(stats_dict[model]['mean'], color=colors[model], linestyle='--', alpha=0.7)
+        
+        # Add annotation about the key difference
+        if 'random' in model_names and 'induced' in model_names:
+            plt.annotate("Key Luria-Delbrück Signature:\nRandom model shows wider, skewed distribution ('jackpot' effect)\nInduced model shows narrower, more symmetric distribution", 
+                       xy=(0.98, 0.02), xycoords='axes fraction', fontsize=12,
+                       ha='right', va='bottom', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        
+        single_plot_path = os.path.join(results_path, "direct_comparison_single_plot.png")
+        plt.savefig(single_plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # 2. VMR BAR CHART WITH RATIO
+        plt.figure(figsize=(10, 7))
+        
+        # First plot the VMR values
+        bars = plt.bar([model_display_names[m] for m in model_names], 
+                     [stats_dict[m]['vmr'] for m in model_names],
+                     color=[colors[m] for m in model_names], alpha=0.7, width=0.6)
+        
+        # Add values on bars
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                   f'{height:.2f}', ha='center', va='bottom', fontsize=12, fontweight='bold')
+        
+        # Add horizontal line at VMR=1
+        plt.axhline(y=1, color='black', linestyle='--', alpha=0.7, 
+                  label='Poisson Distribution (VMR = 1)')
+        
+        plt.xlabel('Mutation Model', fontsize=14)
+        plt.ylabel('Variance-to-Mean Ratio (VMR)', fontsize=14)
+        plt.title('Variance-to-Mean Ratio: Key Indicator for Luria-Delbrück Effect', 
+               fontsize=16, fontweight='bold')
+        
+        # Add ratio indicator if both random and induced models exist
+        if 'random' in stats_dict and 'induced' in stats_dict:
+            random_vmr = stats_dict['random']['vmr']
+            induced_vmr = stats_dict['induced']['vmr']
+            vmr_ratio = random_vmr / induced_vmr if induced_vmr > 0 else float('inf')
+            
+            plt.annotate(f"Random/Induced VMR Ratio: {vmr_ratio:.2f}\n"
+                       f"{'✓ SUPPORTS' if vmr_ratio > 1 else '✗ DOES NOT SUPPORT'} Luria-Delbrück hypothesis", 
+                       xy=(0.5, 0.02), xycoords='axes fraction', fontsize=14, ha='center',
+                       va='bottom', color='green' if vmr_ratio > 1 else 'red', weight='bold',
+                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        plt.ylim(0, max([stats_dict[m]['vmr'] for m in model_names]) * 1.2)
+        plt.grid(True, axis='y', alpha=0.3)
+        plt.legend()
+        
+        vmr_chart_path = os.path.join(results_path, "vmr_comparison_chart.png")
+        plt.savefig(vmr_chart_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Create facet grid of histograms for clearer comparison
+        plt.figure(figsize=(15, 5))
+        
         if len(model_names) > 1:
-            # Prepare data for facet grid
+            # Prepare data for side-by-side plotting
             all_data = []
             for model in model_names:
                 model_data = results_dict[model]
@@ -692,26 +917,286 @@ def create_comparison_visualization(results_dict, results_path):
             
             combined_df = pd.concat(all_data)
             
-            # Create facet grid of histograms
+            # Create facet grid with explicitly scaled subplots
             g = sns.FacetGrid(combined_df, col="model", height=4, aspect=1.2,
                              sharex=False, sharey=False)
+            
+            # Add histograms with density curves
             g.map_dataframe(sns.histplot, x="survivors", kde=True)
+            
+            # Set axis labels and titles
             g.set_axis_labels("Number of Resistant Survivors", "Frequency")
-            g.set_titles("{col} Model")
+            g.set_titles(col_template="{col_name} Model")
+            
+            # Add VMR annotations to each subplot
+            for i, model in enumerate(model_names):
+                g.axes[0, i].annotate(f"VMR = {stats_dict[model]['vmr']:.2f}",
+                                   xy=(0.5, 0.95), xycoords='axes fraction',
+                                   ha='center', va='top', fontsize=12,
+                                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+                
+                # Add explanatory notes based on model type
+                if model == 'random':
+                    g.axes[0, i].annotate("Wide distribution with\nlong right tail\n(Luria-Delbrück signature)",
+                                      xy=(0.05, 0.05), xycoords='axes fraction',
+                                      ha='left', va='bottom', fontsize=10,
+                                      bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+                elif model == 'induced':
+                    g.axes[0, i].annotate("Narrower, more\nsymmetrical distribution\n(Poisson-like)",
+                                      xy=(0.05, 0.05), xycoords='axes fraction',
+                                      ha='left', va='bottom', fontsize=10,
+                                      bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            
             g.tight_layout()
             
             # Save histogram comparison
-            hist_path = os.path.join(results_path, "histogram_comparison.png")
+            hist_path = os.path.join(results_path, "clear_histogram_comparison.png")
             plt.savefig(hist_path, dpi=300, bbox_inches='tight')
+            plt.close()
         
-        plt.close('all')
+        # Create a summary figure specifically designed for presentation
+        plt.figure(figsize=(12, 8))
+        
+        if 'random' in model_names and 'induced' in model_names:
+            # Calculate key statistics
+            random_vmr = stats_dict['random']['vmr']
+            induced_vmr = stats_dict['induced']['vmr']
+            vmr_ratio = random_vmr / induced_vmr if induced_vmr > 0 else float('inf')
+            
+            # Plot simplified distributions
+            plt.plot([], [], color=colors['random'], linewidth=3, label=f"Random Model (VMR={random_vmr:.2f})")
+            plt.plot([], [], color=colors['induced'], linewidth=3, label=f"Induced Model (VMR={induced_vmr:.2f})")
+            
+            # Create a textbox with key findings
+            findings_text = (
+                f"KEY FINDINGS:\n\n"
+                f"1. Random Model VMR: {random_vmr:.2f}\n"
+                f"   - {'MATCHES' if random_vmr > 1.1 else 'DOES NOT MATCH'} Luria-Delbrück prediction (VMR > 1)\n\n"
+                f"2. Induced Model VMR: {induced_vmr:.2f}\n"
+                f"   - {'MATCHES' if 0.9 <= induced_vmr <= 1.1 else 'DOES NOT MATCH'} Poisson prediction (VMR ≈ 1)\n\n"
+                f"3. VMR Ratio (Random/Induced): {vmr_ratio:.2f}\n"
+                f"   - {'SUPPORTS' if vmr_ratio > 1.5 else 'WEAKLY SUPPORTS' if vmr_ratio > 1 else 'DOES NOT SUPPORT'} Luria-Delbrück hypothesis\n\n"
+                f"CONCLUSION:\n"
+                f"{'The simulation results strongly support the Luria-Delbrück hypothesis that mutations occur spontaneously during growth rather than as a response to selection pressure.' if vmr_ratio > 1.5 else 'The simulation results weakly support the Luria-Delbrück hypothesis. Consider adjusting parameters for clearer results.' if vmr_ratio > 1 else 'The simulation results do not clearly support the Luria-Delbrück hypothesis. Consider adjusting simulation parameters.'}"
+            )
+            
+            plt.text(0.5, 0.5, findings_text, ha='center', va='center', fontsize=14,
+                   bbox=dict(facecolor='white', alpha=0.9, boxstyle='round,pad=1',
+                           edgecolor='gray'), transform=plt.gca().transAxes)
+            
+            plt.axis('off')
+            plt.title("Luria-Delbrück Experiment: Summary of Findings", fontsize=18, fontweight='bold')
+            plt.legend(loc='upper center', fontsize=12)
+            
+            summary_path = os.path.join(results_path, "experiment_summary.png")
+            plt.savefig(summary_path, dpi=300, bbox_inches='tight')
+            plt.close()
         
         return save_path
+    
     except ImportError as e:
         log.warning(f"Visualization libraries not available: {e}")
         return None
     except Exception as e:
         log.error(f"Error creating comparison visualizations: {str(e)}")
+        import traceback
+        log.error(traceback.format_exc())
+        return None
+
+# Additional helper function for creating presentations
+def create_presentation_visualizations(results_dict, results_path):
+    """Create visualizations specifically designed for presentations about Luria-Delbrück experiment"""
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        from scipy import stats
+        
+        # Set style for better visualizations
+        plt.style.use('seaborn-v0_8-whitegrid')
+        plt.rcParams['font.size'] = 14
+        plt.rcParams['axes.titlesize'] = 16
+        plt.rcParams['axes.labelsize'] = 14
+        
+        # Get model names and their corresponding data
+        model_names = list(results_dict.keys())
+        
+        # Calculate key statistics
+        stats_dict = {}
+        for model in model_names:
+            data = results_dict[model]
+            mean_val = np.mean(data)
+            var_val = np.var(data)
+            vmr_val = var_val / mean_val if mean_val > 0 else 0
+            
+            stats_dict[model] = {
+                'mean': mean_val,
+                'variance': var_val,
+                'vmr': vmr_val
+            }
+        
+        # Define colors and display names
+        colors = {'random': 'royalblue', 'induced': 'firebrick', 'combined': 'forestgreen'}
+        model_display_names = {'random': 'Random', 'induced': 'Induced', 'combined': 'Combined'}
+        
+        # 1. THEORY SLIDE: Theoretical Assumptions
+        plt.figure(figsize=(12, 8))
+        plt.axis('off')
+        
+        title = "Luria-Delbrück Experiment: Theoretical Assumptions"
+        text = (
+            "Two competing hypotheses of bacterial mutation:\n\n"
+            "1. RANDOM MUTATION (Darwinian):\n"
+            "   • Mutations occur spontaneously during growth\n"
+            "   • Independent of selective pressure\n"
+            "   • Some cultures will have early mutations leading to many resistant cells ('jackpots')\n"
+            "   • Leads to highly variable outcomes (high variance-to-mean ratio)\n\n"
+            "2. INDUCED MUTATION (Lamarckian):\n"
+            "   • Mutations occur only in response to selective pressure\n"
+            "   • All bacteria have equal probability of mutation\n"
+            "   • Leads to Poisson distribution of resistant cells\n"
+            "   • Variance approximately equals mean (variance-to-mean ratio ≈ 1)\n\n"
+            "The distribution pattern of resistant cells across cultures can\n"
+            "distinguish between these two hypotheses."
+        )
+        
+        plt.text(0.5, 0.95, title, ha='center', va='top', fontsize=20, fontweight='bold')
+        plt.text(0.5, 0.5, text, ha='center', va='center', fontsize=16)
+        
+        theory_path = os.path.join(results_path, "presentation_theory.png")
+        plt.savefig(theory_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # 2. DISTRIBUTIONS SLIDE: Distribution Patterns
+        if 'random' in model_names and 'induced' in model_names:
+            fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+            
+            # Random model distribution
+            sns.histplot(results_dict['random'], kde=True, color=colors['random'], ax=axes[0])
+            axes[0].set_title(f"Random Model (VMR = {stats_dict['random']['vmr']:.2f})", fontsize=16)
+            axes[0].set_xlabel("Number of Resistant Survivors")
+            axes[0].set_ylabel("Frequency")
+            
+            # Add annotation for random model
+            axes[0].annotate("Wide distribution with\nlong right tail\n('jackpot' effect)",
+                         xy=(0.95, 0.95), xycoords='axes fraction',
+                         ha='right', va='top', fontsize=14,
+                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            
+            # Induced model distribution
+            sns.histplot(results_dict['induced'], kde=True, color=colors['induced'], ax=axes[1])
+            axes[1].set_title(f"Induced Model (VMR = {stats_dict['induced']['vmr']:.2f})", fontsize=16)
+            axes[1].set_xlabel("Number of Resistant Survivors")
+            axes[1].set_ylabel("Frequency")
+            
+            # Add annotation for induced model
+            axes[1].annotate("Narrower, more\nsymmetrical distribution\n(Poisson-like)",
+                         xy=(0.95, 0.95), xycoords='axes fraction',
+                         ha='right', va='top', fontsize=14,
+                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            
+            plt.suptitle("Distribution Patterns of Resistant Cells", fontsize=18, fontweight='bold')
+            plt.tight_layout()
+            
+            distributions_path = os.path.join(results_path, "presentation_distributions.png")
+            plt.savefig(distributions_path, dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        # 3. VMR SLIDE: Variance-to-Mean Ratio Comparison
+        plt.figure(figsize=(12, 8))
+        
+        # Extract VMR values
+        vmr_values = [stats_dict[model]['vmr'] for model in model_names]
+        
+        # Create bar chart with custom colors
+        bars = plt.bar([model_display_names[m] for m in model_names], vmr_values, 
+                     color=[colors[m] for m in model_names], alpha=0.8, width=0.6)
+        
+        # Add values on top of bars
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 0.2,
+                   f'{height:.2f}', ha='center', va='bottom', fontsize=14, fontweight='bold')
+        
+        # Add horizontal line at VMR=1
+        plt.axhline(y=1, color='black', linestyle='--', alpha=0.7, 
+                  label='Poisson Expectation (VMR = 1)')
+        
+        plt.xlabel('Mutation Model', fontsize=16)
+        plt.ylabel('Variance-to-Mean Ratio (VMR)', fontsize=16)
+        plt.title('Variance-to-Mean Ratio Comparison\nKey Statistical Evidence for Luria-Delbrück Hypothesis', 
+               fontsize=18, fontweight='bold')
+        
+        # Add explanation text
+        plt.annotate("VMR ≈ 1: Poisson distribution (expected for induced mutations)\nVMR > 1: Indicates non-random clustering ('jackpot' cultures)", 
+                   xy=(0.5, 0.05), xycoords='axes fraction', fontsize=14, ha='center',
+                   va='bottom', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        
+        plt.ylim(0, max(vmr_values) * 1.3)
+        plt.grid(True, axis='y', alpha=0.3)
+        plt.legend(fontsize=12)
+        
+        vmr_slide_path = os.path.join(results_path, "presentation_vmr.png")
+        plt.savefig(vmr_slide_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # 4. CONCLUSION SLIDE: Results and Interpretation
+        if 'random' in model_names and 'induced' in model_names:
+            plt.figure(figsize=(12, 8))
+            plt.axis('off')
+            
+            # Calculate random/induced ratio
+            random_vmr = stats_dict['random']['vmr']
+            induced_vmr = stats_dict['induced']['vmr']
+            vmr_ratio = random_vmr / induced_vmr if induced_vmr > 0 else float('inf')
+            
+            title = "Luria-Delbrück Experiment: Results and Interpretation"
+            
+            conclusion_color = 'green' if vmr_ratio > 1.5 else 'orange' if vmr_ratio > 1 else 'red'
+            
+            if vmr_ratio > 1.5:
+                conclusion = "The simulation results STRONGLY SUPPORT the Luria-Delbrück hypothesis"
+            elif vmr_ratio > 1:
+                conclusion = "The simulation results SUPPORT the Luria-Delbrück hypothesis"
+            else:
+                conclusion = "The simulation results do not clearly support the Luria-Delbrück hypothesis"
+            
+            text = (
+                f"KEY FINDINGS:\n\n"
+                f"1. Random Model VMR: {random_vmr:.2f}\n"
+                f"   • {'MATCHES' if random_vmr > 1.1 else 'DOES NOT MATCH'} Luria-Delbrück prediction (VMR > 1)\n\n"
+                f"2. Induced Model VMR: {induced_vmr:.2f}\n"
+                f"   • {'MATCHES' if 0.9 <= induced_vmr <= 1.1 else 'DOES NOT MATCH'} Poisson prediction (VMR ≈ 1)\n\n"
+                f"3. VMR Ratio (Random/Induced): {vmr_ratio:.2f}\n\n"
+                f"CONCLUSION:\n\n"
+                f"{conclusion}\n\n"
+                f"These results indicate that bacterial mutations occur\n"
+                f"spontaneously during growth rather than as a direct\n"
+                f"response to selection pressure, supporting the\n"
+                f"Darwinian view of evolution rather than the Lamarckian view."
+            )
+            
+            plt.text(0.5, 0.95, title, ha='center', va='top', fontsize=20, fontweight='bold')
+            plt.text(0.5, 0.8, conclusion, ha='center', va='top', fontsize=18, 
+                   fontweight='bold', color=conclusion_color)
+            plt.text(0.5, 0.4, text, ha='center', va='center', fontsize=16)
+            
+            conclusion_path = os.path.join(results_path, "presentation_conclusion.png")
+            plt.savefig(conclusion_path, dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        # Return paths to all created slides
+        return {
+            'theory': theory_path,
+            'distributions': locals().get('distributions_path'),
+            'vmr': vmr_slide_path,
+            'conclusion': locals().get('conclusion_path')
+        }
+    
+    except ImportError as e:
+        log.warning(f"Visualization libraries not available: {e}")
+        return None
+    except Exception as e:
+        log.error(f"Error creating presentation visualizations: {str(e)}")
         import traceback
         log.error(traceback.format_exc())
         return None
@@ -831,7 +1316,8 @@ def run_all_models(args):
     total_time = sum(elapsed_times.values())
     log.info(f"Total execution time: {total_time:.2f} seconds")
     
-    return results, stats, elapsed_times
+    print(f"Returning from run_all_models: {len(results)} results, {len(stats)} stats, {len(elapsed_times)} times")
+    return results, stats, elapsed_times  # This should fix the "not enough values to unpack" error
 
 def create_comparison_report(stats, results_path, elapsed_times=None):
     """Create a text report comparing the statistics of all models."""
