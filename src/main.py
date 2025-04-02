@@ -1,10 +1,3 @@
-"""
-Main script for running the Luria-Delbrück simulation with different mutation models.
-path : ./Assignment_Introduction_Luria_Delbrook/src/main.py
-# Description: Main script for running the Luria-Delbrück simulation.
-
-"""
-
 import numpy as np
 import uuid
 import argparse 
@@ -19,6 +12,7 @@ import cProfile
 import pstats
 import multiprocessing as mp
 from functools import partial
+import pandas as pd
 
 # Helper function needed for the improved visualization
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -77,6 +71,7 @@ def timing_decorator(func):
         log.info(f"Function {func.__name__} took {elapsed_time:.2f} seconds to execute")
         return result, elapsed_time
     return wrapper
+
 #######################################################################
 # Classes
 #######################################################################
@@ -138,207 +133,182 @@ class Organism:
 #######################################################################
 # Simulation functions 
 #######################################################################
-def process_culture(culture_id, initial_population_size, num_generations, mutation_rate, log_first_cultures=False):
-    """Process a single culture for random mutations model - for parallel processing"""
+def process_culture(args):
+    """Generic process function for all models - designed for parallel processing"""
+    culture_id, model_type, initial_population_size, num_generations, mutation_rate, induced_mutation_rate, log_first_cultures = args
+    
     # Initialize population with sensitive organisms
     population = [Organism() for _ in range(initial_population_size)]
     
-    # Track generation stats for this culture
+    # Track generation stats for this culture if it's the first one and logging is enabled
     generation_stats = [] if culture_id == 0 and log_first_cultures else None
     
-    # Simulate generations
-    for gen in range(num_generations):
-        new_population = []
-        for organism in population:
-            # Each organism produces two offspring
-            offspring1 = organism.reproduce(mutation_rate)
-            offspring2 = organism.reproduce(mutation_rate)
+    # Different behavior based on model type
+    if model_type == "random":
+        # Simulate generations with random mutations
+        for gen in range(num_generations):
+            new_population = []
+            for organism in population:
+                # Each organism produces two offspring with possible mutations
+                offspring1 = organism.reproduce(mutation_rate)
+                offspring2 = organism.reproduce(mutation_rate)
+                
+                new_population.append(offspring1)
+                new_population.append(offspring2)
+                
+            population = new_population
             
-            new_population.append(offspring1)
-            new_population.append(offspring2)
-            
-        population = new_population
+            # Track statistics for this generation if needed
+            if generation_stats is not None:
+                resistant_count = sum(org.is_resistant for org in population)
+                resistant_percent = (resistant_count / len(population)) * 100
+                generation_stats.append({
+                    'gen': gen + 1,
+                    'population': len(population),
+                    'resistant': resistant_count,
+                    'resistant_percent': resistant_percent
+                })
         
-        # Track statistics for this generation
-        if generation_stats is not None:
-            resistant_count = sum(org.is_resistant for org in population)
-            resistant_percent = (resistant_count / len(population)) * 100
-            generation_stats.append({
-                'gen': gen + 1,
-                'population': len(population),
-                'resistant': resistant_count,
-                'resistant_percent': resistant_percent
-            })
+        # For random model, no further mutations after growth
+        pre_induced_resistant = sum(org.is_resistant for org in population)
+        survivors = pre_induced_resistant
+        
+    elif model_type == "induced":
+        # Simulate generations with no mutations during growth
+        for gen in range(num_generations):
+            new_population = []
+            for organism in population:
+                # Each organism reproduces without mutation
+                offspring1 = Organism(genome=organism.genome.copy())
+                offspring2 = Organism(genome=organism.genome.copy())
+                
+                new_population.append(offspring1)
+                new_population.append(offspring2)
+                
+            population = new_population
+            
+            # Track statistics for this generation if needed
+            if generation_stats is not None:
+                resistant_count = sum(org.is_resistant for org in population)
+                resistant_percent = (resistant_count / len(population)) * 100
+                generation_stats.append({
+                    'gen': gen + 1,
+                    'population': len(population),
+                    'resistant': resistant_count,
+                    'resistant_percent': resistant_percent
+                })
+        
+        # Apply induced mutations at the end
+        pre_induced_resistant = 0  # Always 0 for induced model
+        for organism in population:
+            organism.mutate(mutation_rate)  # Apply with specified rate
+            
+        survivors = sum(org.is_resistant for org in population)
+        
+    else:  # combined model
+        # Simulate generations with random mutations
+        for gen in range(num_generations):
+            new_population = []
+            for organism in population:
+                # Each organism produces two offspring with possible mutations
+                offspring1 = organism.reproduce(mutation_rate)
+                offspring2 = organism.reproduce(mutation_rate)
+                
+                new_population.append(offspring1)
+                new_population.append(offspring2)
+                
+            population = new_population
+            
+            # Track statistics for this generation if needed
+            if generation_stats is not None:
+                resistant_count = sum(org.is_resistant for org in population)
+                resistant_percent = (resistant_count / len(population)) * 100
+                generation_stats.append({
+                    'gen': gen + 1,
+                    'population': len(population),
+                    'resistant': resistant_count,
+                    'resistant_percent': resistant_percent
+                })
+        
+        # Store pre-induced mutation stats
+        pre_induced_resistant = sum(org.is_resistant for org in population)
+        
+        # Apply additional induced mutations at the end
+        for organism in population:
+            organism.mutate(induced_mutation_rate)  # Apply with induced rate
+            
+        survivors = sum(org.is_resistant for org in population)
     
-    # Count survivors (resistant organisms) after all generations
-    survivors = sum(org.is_resistant for org in population)
-    
-    # Return both survivors and generation stats if available
-    return survivors, generation_stats if generation_stats else None
+    # Return results with appropriate format based on model
+    if model_type == "combined":
+        return survivors, generation_stats, pre_induced_resistant
+    else:
+        return survivors, generation_stats
 
 @timing_decorator
-def simulate_random_mutations(num_cultures=1000, initial_population_size=10, num_generations=5, mutation_rate=0.1, use_parallel=True, n_processes=None):
+def simulate_mutations(model_type, num_cultures=1000, initial_population_size=10, num_generations=5, 
+                     mutation_rate=0.1, induced_mutation_rate=0.1, use_parallel=True, n_processes=None):
     """
-    Random (Darwinian) mutation model using the Organism class.
-    Mutations arise spontaneously at each generation.
+    Generic simulation function for all mutation models.
     Returns a list of 'survivors' (resistant cell counts) across cultures.
     """
     # Set the class variables for all Organisms
-    Organism.P_MUTATION = mutation_rate
+    Organism.P_MUTATION = mutation_rate if model_type != "induced" else 0
     
     survivors_list = []
     generation_stats = None
-    log.debug(f"Starting random mutation simulation with {num_cultures} cultures")
+    pre_induced_resistant = 0 if model_type == "combined" else None
+    
+    log.debug(f"Starting {model_type} mutation simulation with {num_cultures} cultures")
+
+    # Prepare arguments for each culture
+    culture_args = [(culture_id, model_type, initial_population_size, num_generations, 
+                    mutation_rate, induced_mutation_rate, True if culture_id == 0 else False) 
+                    for culture_id in range(num_cultures)]
 
     if use_parallel and num_cultures > 10:
         # Use multiprocessing for better performance
         n_processes = n_processes or max(1, mp.cpu_count() - 1)
         log.info(f"Using parallel processing with {n_processes} processes")
         
-        # Create a partial function with fixed parameters
-        process_func = partial(
-            process_culture, 
-            initial_population_size=initial_population_size,
-            num_generations=num_generations,
-            mutation_rate=mutation_rate,
-            log_first_cultures=True
-        )
-        
         # Process cultures in parallel
         with mp.Pool(processes=n_processes) as pool:
             results = list(tqdm(
-                pool.imap(process_func, range(num_cultures)),
+                pool.imap(process_culture, culture_args),
                 total=num_cultures,
-                desc="Random Model Progress",
+                desc=f"{model_type.capitalize()} Model Progress",
                 unit="culture"
             ))
         
-        # Separate survivors and stats
-        for survivors, stats in results:
-            survivors_list.append(survivors)
-            if stats is not None:
-                generation_stats = stats
+        # Process results based on model type
+        if model_type == "combined":
+            for i, (survivors, stats, pre_induced) in enumerate(results):
+                survivors_list.append(survivors)
+                if stats is not None:
+                    generation_stats = stats
+                if i == 0:
+                    pre_induced_resistant = pre_induced
+        else:
+            for survivors, stats in results:
+                survivors_list.append(survivors)
+                if stats is not None:
+                    generation_stats = stats
         
     else:
         # Sequential processing with progress bar
-        for culture_id in tqdm(range(num_cultures), desc="Random Model Progress", unit="culture"):
-            survivors, stats = process_culture(
-                culture_id, 
-                initial_population_size,
-                num_generations,
-                mutation_rate,
-                log_first_cultures=True
-            )
-            survivors_list.append(survivors)
-            if stats is not None:
-                generation_stats = stats
-    
-    # Log generation progression for first culture
-    if generation_stats:
-        log.info("Generation progression (first culture):")
-        for stat in generation_stats:
-            log.info(f"  Generation {stat['gen']}: {stat['resistant']} resistant ({stat['resistant_percent']:.2f}%)")
-
-    return survivors_list
-
-def process_culture_induced(culture_id, initial_population_size, num_generations, mutation_rate, log_first_cultures=False):
-    """Process a single culture for induced mutations model - for parallel processing"""
-    # Initialize population with sensitive organisms
-    population = [Organism() for _ in range(initial_population_size)]
-    
-    # Track generation stats for this culture
-    generation_stats = [] if culture_id == 0 and log_first_cultures else None
-    
-    # Simulate generations with no mutations
-    for gen in range(num_generations):
-        new_population = []
-        for organism in population:
-            # Each organism reproduces without mutation
-            offspring1 = Organism(genome=organism.genome.copy())
-            offspring2 = Organism(genome=organism.genome.copy())
-            
-            new_population.append(offspring1)
-            new_population.append(offspring2)
-            
-        population = new_population
-        
-        # Track statistics for this generation
-        if generation_stats is not None:
-            resistant_count = sum(org.is_resistant for org in population)
-            resistant_percent = (resistant_count / len(population)) * 100
-            generation_stats.append({
-                'gen': gen + 1,
-                'population': len(population),
-                'resistant': resistant_count,
-                'resistant_percent': resistant_percent
-            })
-    
-    # Apply induced mutations at the end
-    for organism in population:
-        organism.mutate(mutation_rate)  # Apply with specified rate
-    
-    # Count survivors
-    survivors = sum(org.is_resistant for org in population)
-    
-    # Return both survivors and generation stats if available
-    return survivors, generation_stats if generation_stats else None
-
-@timing_decorator
-def simulate_induced_mutations(num_cultures=1000, initial_population_size=10, num_generations=5, mutation_rate=0.1, use_parallel=True, n_processes=None):
-    """
-    Induced (Lamarckian) mutation model using the Organism class.
-    No mutations during growth; only at the end (when selective agent is applied).
-    Returns a list of 'survivors' (resistant cell counts) across cultures.
-    """
-    # Set the class variables for all Organisms
-    Organism.P_MUTATION = 0  # No spontaneous mutations during growth
-    
-    survivors_list = []
-    generation_stats = None
-    log.debug(f"Starting induced mutation simulation with {num_cultures} cultures")
-
-    if use_parallel and num_cultures > 10:
-        # Use multiprocessing for better performance
-        n_processes = n_processes or max(1, mp.cpu_count() - 1)
-        log.info(f"Using parallel processing with {n_processes} processes")
-        
-        # Create a partial function with fixed parameters
-        process_func = partial(
-            process_culture_induced, 
-            initial_population_size=initial_population_size,
-            num_generations=num_generations,
-            mutation_rate=mutation_rate,
-            log_first_cultures=True
-        )
-        
-        # Process cultures in parallel
-        with mp.Pool(processes=n_processes) as pool:
-            results = list(tqdm(
-                pool.imap(process_func, range(num_cultures)),
-                total=num_cultures,
-                desc="Induced Model Progress",
-                unit="culture"
-            ))
-        
-        # Separate survivors and stats
-        for survivors, stats in results:
-            survivors_list.append(survivors)
-            if stats is not None:
-                generation_stats = stats
-        
-    else:
-        # Sequential processing with progress bar
-        for culture_id in tqdm(range(num_cultures), desc="Induced Model Progress", unit="culture"):
-            survivors, stats = process_culture_induced(
-                culture_id, 
-                initial_population_size,
-                num_generations,
-                mutation_rate,
-                log_first_cultures=True
-            )
-            survivors_list.append(survivors)
-            if stats is not None:
-                generation_stats = stats
+        for args in tqdm(culture_args, desc=f"{model_type.capitalize()} Model Progress", unit="culture"):
+            if model_type == "combined":
+                survivors, stats, pre_induced = process_culture(args)
+                survivors_list.append(survivors)
+                if stats is not None:
+                    generation_stats = stats
+                if args[0] == 0:  # First culture
+                    pre_induced_resistant = pre_induced
+            else:
+                survivors, stats = process_culture(args)
+                survivors_list.append(survivors)
+                if stats is not None:
+                    generation_stats = stats
     
     # Log generation progression for first culture
     if generation_stats:
@@ -346,133 +316,12 @@ def simulate_induced_mutations(num_cultures=1000, initial_population_size=10, nu
         for stat in generation_stats:
             log.info(f"  Generation {stat['gen']}: {stat['resistant']} resistant ({stat['resistant_percent']:.2f}%)")
         
-        # Calculate final stats
-        final_resistant = survivors_list[0]
-        final_population = initial_population_size * (2 ** num_generations)
-        final_percent = (final_resistant / final_population) * 100
-        log.info(f"  After induced mutations: {final_resistant} resistant ({final_percent:.2f}%)")
-
-    return survivors_list
-
-def process_culture_combined(culture_id, initial_population_size, num_generations, random_mut_rate, induced_mut_rate, log_first_cultures=False):
-    """Process a single culture for combined mutations model - for parallel processing"""
-    # Initialize population with sensitive organisms
-    population = [Organism() for _ in range(initial_population_size)]
-    
-    # Track generation stats for this culture
-    generation_stats = [] if culture_id == 0 and log_first_cultures else None
-    
-    # Simulate generations with random mutations
-    for gen in range(num_generations):
-        new_population = []
-        for organism in population:
-            # Each organism produces two offspring with possible mutations
-            offspring1 = organism.reproduce(random_mut_rate)
-            offspring2 = organism.reproduce(random_mut_rate)
-            
-            new_population.append(offspring1)
-            new_population.append(offspring2)
-            
-        population = new_population
-        
-        # Track statistics for this generation
-        if generation_stats is not None:
-            resistant_count = sum(org.is_resistant for org in population)
-            resistant_percent = (resistant_count / len(population)) * 100
-            generation_stats.append({
-                'gen': gen + 1,
-                'population': len(population),
-                'resistant': resistant_count,
-                'resistant_percent': resistant_percent
-            })
-    
-    # Store pre-induced mutation stats
-    pre_induced_resistant = sum(org.is_resistant for org in population)
-    
-    # Apply additional induced mutations at the end
-    for organism in population:
-        organism.mutate(induced_mut_rate)  # Apply with specified rate
-    
-    # Count survivors
-    survivors = sum(org.is_resistant for org in population)
-    
-    # Return survivors, stats, and pre-induced count
-    return survivors, generation_stats if generation_stats else None, pre_induced_resistant
-
-@timing_decorator
-def simulate_combined_mutations(num_cultures=1000, initial_population_size=10, num_generations=5, 
-                               random_mut_rate=0.1, induced_mut_rate=0.1, use_parallel=True, n_processes=None):
-    """
-    Combined model using the Organism class:
-    - Random mutations occur during each generation.
-    - Additional induced mutations occur at the end.
-    """
-    # Set the class variables for all Organisms
-    Organism.P_MUTATION = random_mut_rate
-    
-    survivors_list = []
-    generation_stats = None
-    pre_induced_resistant = 0
-    log.debug(f"Starting combined mutation simulation with {num_cultures} cultures")
-
-    if use_parallel and num_cultures > 10:
-        # Use multiprocessing for better performance
-        n_processes = n_processes or max(1, mp.cpu_count() - 1)
-        log.info(f"Using parallel processing with {n_processes} processes")
-        
-        # Create a partial function with fixed parameters
-        process_func = partial(
-            process_culture_combined, 
-            initial_population_size=initial_population_size,
-            num_generations=num_generations,
-            random_mut_rate=random_mut_rate,
-            induced_mut_rate=induced_mut_rate,
-            log_first_cultures=True
-        )
-        
-        # Process cultures in parallel
-        with mp.Pool(processes=n_processes) as pool:
-            results = list(tqdm(
-                pool.imap(process_func, range(num_cultures)),
-                total=num_cultures,
-                desc="Combined Model Progress",
-                unit="culture"
-            ))
-        
-        # Separate survivors, stats, and pre-induced count
-        for i, (survivors, stats, pre_induced) in enumerate(results):
-            survivors_list.append(survivors)
-            if stats is not None:
-                generation_stats = stats
-            if i == 0:
-                pre_induced_resistant = pre_induced
-        
-    else:
-        # Sequential processing with progress bar
-        for culture_id in tqdm(range(num_cultures), desc="Combined Model Progress", unit="culture"):
-            survivors, stats, pre_induced = process_culture_combined(
-                culture_id, 
-                initial_population_size,
-                num_generations,
-                random_mut_rate,
-                induced_mut_rate,
-                log_first_cultures=True
-            )
-            survivors_list.append(survivors)
-            if stats is not None:
-                generation_stats = stats
-            if culture_id == 0:
-                pre_induced_resistant = pre_induced
-    
-    # Log generation progression and effect of induced mutations for first culture
-    if generation_stats:
-        post_induced_resistant = survivors_list[0]
-        induced_effect = post_induced_resistant - pre_induced_resistant
-        log.info("Generation progression (first culture):")
-        for stat in generation_stats:
-            log.info(f"  Generation {stat['gen']}: {stat['resistant']} resistant ({stat['resistant_percent']:.2f}%)")
-        log.info(f"  Before induced mutations: {pre_induced_resistant} resistant")
-        log.info(f"  After induced mutations: {post_induced_resistant} resistant (added {induced_effect})")
+        # Additional logging for combined model
+        if model_type == "combined" and pre_induced_resistant is not None:
+            post_induced_resistant = survivors_list[0]
+            induced_effect = post_induced_resistant - pre_induced_resistant
+            log.info(f"  Before induced mutations: {pre_induced_resistant} resistant")
+            log.info(f"  After induced mutations: {post_induced_resistant} resistant (added {induced_effect})")
 
     return survivors_list
 
@@ -491,6 +340,9 @@ def analyze_results(survivors_list, model_name):
     std_survivors = np.std(survivors_list)
     cv = std_survivors / mean_survivors if mean_survivors > 0 else 0
     
+    # Calculate variance-to-mean ratio (VMR) - key for Luria-Delbrück analysis
+    vmr = var_survivors / mean_survivors if mean_survivors > 0 else 0
+    
     # Count cultures with zero resistant organisms
     zero_resistant_count = sum(1 for s in survivors_list if s == 0)
     zero_resistant_percent = (zero_resistant_count / len(survivors_list)) * 100
@@ -503,6 +355,7 @@ def analyze_results(survivors_list, model_name):
         'median': median_survivors,
         'max': max_survivors,
         'coefficient_of_variation': cv,
+        'variance_to_mean_ratio': vmr,
         'zero_resistant_cultures': zero_resistant_count,
         'zero_resistant_percent': zero_resistant_percent
     }
@@ -523,7 +376,6 @@ def create_visualizations(survivors_list, model_name, results_path):
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns
-        import numpy as np
         
         # Set style for better visualizations
         sns.set_style("whitegrid")
@@ -540,13 +392,14 @@ def create_visualizations(survivors_list, model_name, results_path):
         plt.subplot(2, 2, 2)
         if max(survivors_list) > 0:
             # Add a small value to handle zeros when using log scale
-            nonzero_data = [x + 0.1 for x in survivors_list]
-            bins = np.logspace(np.log10(0.1), np.log10(max(nonzero_data)), 20)
-            plt.hist(nonzero_data, bins=bins, alpha=0.7, color='forestgreen')
-            plt.xscale('log')
-            plt.xlabel("Number of Resistant Survivors (log scale)")
-            plt.ylabel("Frequency")
-            plt.title("Log-Scale Distribution")
+            nonzero_data = [x + 0.1 for x in survivors_list if x > 0]
+            if len(nonzero_data) > 0:
+                bins = np.logspace(np.log10(min(nonzero_data)), np.log10(max(nonzero_data)), 20)
+                plt.hist(nonzero_data, bins=bins, alpha=0.7, color='forestgreen')
+                plt.xscale('log')
+                plt.xlabel("Number of Resistant Survivors (log scale)")
+                plt.ylabel("Frequency")
+                plt.title("Log-Scale Distribution")
         
         # 3. CCDF plot (bottom left) - Excellent for showing power-law type distributions
         plt.subplot(2, 2, 3)
@@ -581,8 +434,13 @@ def create_visualizations(survivors_list, model_name, results_path):
             if model_name == "random":
                 # Simulate Luria-Delbrück distribution (simplified)
                 # Using log-normal as an approximation
-                theoretical_data = np.random.lognormal(0, 1, size=1000)
-                plt.title("Random Mutation Model vs. Theoretical Luria-Delbrück Distribution")
+                nonzero_data = [x for x in survivors_list if x > 0]
+                if len(nonzero_data) > 0:
+                    log_data = np.log(nonzero_data)
+                    mean_log = np.mean(log_data)
+                    sigma_log = np.std(log_data)
+                    theoretical_data = np.random.lognormal(mean_log, sigma_log, size=10000)
+                    plt.title("Random Mutation Model vs. Theoretical Luria-Delbrück Distribution")
             else:
                 # Simulate Poisson distribution for induced model
                 theoretical_data = np.random.poisson(np.mean(survivors_list), size=1000)
@@ -607,11 +465,10 @@ def create_visualizations(survivors_list, model_name, results_path):
 
 @timing_decorator
 def create_comparison_visualization(results_dict, results_path):
-    """Create clearer comparison visualizations for all models."""
+    """Create comparison visualizations for all models."""
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns
-        import numpy as np
         from matplotlib.gridspec import GridSpec
         
         # Set style for better visualizations
@@ -876,10 +733,10 @@ def run_all_models(args):
     log.info("Running Random Mutations Model")
     log.info("="*50)
     
-    Organism.N_GENES = 1
-    Organism.P_MUTATION = args.mutation_rate
+    Organism.N_GENES = args.n_genes
     
-    random_survivors, random_time = simulate_random_mutations(
+    random_survivors, random_time = simulate_mutations(
+        model_type="random",
         num_cultures=args.num_cultures,
         initial_population_size=args.initial_population_size,
         num_generations=args.num_generations,
@@ -894,23 +751,17 @@ def run_all_models(args):
     stats['random'] = stats_result
     elapsed_times['random_analysis'] = stats_time
     
-    # Original visualizations
-    _, vis_time = create_visualizations(random_survivors, 'random', args.results_path)
+    # Visualizations
+    vis_path, vis_time = create_visualizations(random_survivors, 'random', args.results_path)
     elapsed_times['random_visualization'] = vis_time
-    
-    # New improved visualizations
-    try:
-        _, improved_vis_time = create_visualizations(random_survivors, 'random', args.results_path)
-        elapsed_times['random_improved_visualization'] = improved_vis_time
-    except Exception as e:
-        log.error(f"Error creating improved visualizations for random model: {str(e)}")
     
     # 2. Run Induced Mutations Model
     log.info("\n" + "="*50)
     log.info("Running Induced Mutations Model")
     log.info("="*50)
     
-    induced_survivors, induced_time = simulate_induced_mutations(
+    induced_survivors, induced_time = simulate_mutations(
+        model_type="induced",
         num_cultures=args.num_cultures,
         initial_population_size=args.initial_population_size,
         num_generations=args.num_generations,
@@ -925,28 +776,22 @@ def run_all_models(args):
     stats['induced'] = stats_result
     elapsed_times['induced_analysis'] = stats_time
     
-    # Original visualizations
-    _, vis_time = create_visualizations(induced_survivors, 'induced', args.results_path)
+    # Visualizations
+    vis_path, vis_time = create_visualizations(induced_survivors, 'induced', args.results_path)
     elapsed_times['induced_visualization'] = vis_time
-    
-    # New improved visualizations
-    try:
-        _, improved_vis_time = create_visualizations(induced_survivors, 'induced', args.results_path)
-        elapsed_times['induced_improved_visualization'] = improved_vis_time
-    except Exception as e:
-        log.error(f"Error creating improved visualizations for induced model: {str(e)}")
     
     # 3. Run Combined Mutations Model
     log.info("\n" + "="*50)
     log.info("Running Combined Mutations Model")
     log.info("="*50)
     
-    combined_survivors, combined_time = simulate_combined_mutations(
+    combined_survivors, combined_time = simulate_mutations(
+        model_type="combined",
         num_cultures=args.num_cultures,
         initial_population_size=args.initial_population_size,
         num_generations=args.num_generations,
-        random_mut_rate=args.mutation_rate,
-        induced_mut_rate=args.induced_mutation_rate,
+        mutation_rate=args.mutation_rate,
+        induced_mutation_rate=args.induced_mutation_rate,
         use_parallel=args.use_parallel,
         n_processes=args.n_processes
     )
@@ -957,91 +802,25 @@ def run_all_models(args):
     stats['combined'] = stats_result
     elapsed_times['combined_analysis'] = stats_time
     
-    # Original visualizations
-    _, vis_time = create_visualizations(combined_survivors, 'combined', args.results_path)
+    # Visualizations
+    vis_path, vis_time = create_visualizations(combined_survivors, 'combined', args.results_path)
     elapsed_times['combined_visualization'] = vis_time
     
-    # New improved visualizations
-    try:
-        _, improved_vis_time = create_visualizations(combined_survivors, 'combined', args.results_path)
-        elapsed_times['combined_improved_visualization'] = improved_vis_time
-    except Exception as e:
-        log.error(f"Error creating improved visualizations for combined model: {str(e)}")
-    
-    # 4. Create original comparison visualizations
+    # 4. Create comparison visualizations
     log.info("\n" + "="*50)
     log.info("Creating Comparison Visualizations")
     log.info("="*50)
     
-    _, comparison_time = create_comparison_visualization(results, args.results_path)
+    comp_path, comparison_time = create_comparison_visualization(results, args.results_path)
     elapsed_times['comparison_visualization'] = comparison_time
     
-    # 5. Create new Luria-Delbrück direct comparison visualization
-    try:
-        log.info("Creating specialized Luria-Delbrück comparison visualization")
-        _, ld_comparison_time = create_luria_delbrueck_comparison(results, args.results_path)
-        elapsed_times['luria_delbrueck_comparison'] = ld_comparison_time
-    except Exception as e:
-        log.error(f"Error creating Luria-Delbrück comparison: {str(e)}")
-    
-    # 6. Calculate additional Luria-Delbrück specific metrics
-    try:
-        log.info("Calculating Luria-Delbrück specific metrics")
-        ld_metrics_time_start = time.time()
-        
-        # Calculate variance to mean ratios for all models
-        for model in results:
-            data = results[model]
-            mean = np.mean(data)
-            variance = np.var(data)
-            if mean > 0:
-                vmr = variance / mean
-                stats[model]['variance_to_mean_ratio'] = vmr
-                log.info(f"{model.capitalize()} model variance-to-mean ratio: {vmr:.2f}")
-                
-                # For random model, this should be >> 1 for Luria-Delbrück distribution
-                if model == 'random':
-                    log.info(f"Random model VMR {vmr:.2f} {'> 1 as expected for Luria-Delbrück' if vmr > 1 else '< 1, unexpected'}")
-                
-                # For induced model, this should be ≈ 1 for Poisson distribution
-                if model == 'induced':
-                    log.info(f"Induced model VMR {vmr:.2f} {'≈ 1 as expected for Poisson' if 0.9 <= vmr <= 1.1 else 'not ≈ 1, unexpected'}")
-        
-        # Calculate p0 method mutation rate estimate for random model
-        if 'random' in results:
-            zero_count = sum(1 for x in results['random'] if x == 0)
-            total_cultures = len(results['random'])
-            if zero_count > 0 and zero_count < total_cultures:
-                p0 = zero_count / total_cultures
-                # Luria-Delbrück p0 method: mutation rate ≈ -ln(p0)/N where N is final population size
-                final_pop_size = args.initial_population_size * (2 ** args.num_generations)
-                mutation_rate_estimate = -np.log(p0) / final_pop_size
-                log.info(f"Estimated mutation rate using p0 method: {mutation_rate_estimate:.8f}")
-                stats['random']['p0_method_mutation_rate'] = mutation_rate_estimate
-            else:
-                log.info("Cannot estimate mutation rate using p0 method (no zero cultures or all zero cultures)")
-        
-        ld_metrics_time = time.time() - ld_metrics_time_start
-        elapsed_times['luria_delbrueck_metrics'] = ld_metrics_time
-    except Exception as e:
-        log.error(f"Error calculating Luria-Delbrück metrics: {str(e)}")
-    
-    # 7. Create comparison report
+    # 5. Create comparison report
     report_time_start = time.time()
     create_comparison_report(stats, args.results_path, elapsed_times)
     report_time = time.time() - report_time_start
     elapsed_times['report_creation'] = report_time
     
-    # 8. Create enhanced report specifically for Luria-Delbrück analysis
-    try:
-        ld_report_time_start = time.time()
-        create_luria_delbrueck_report(stats, results, args, args.results_path)
-        ld_report_time = time.time() - ld_report_time_start
-        elapsed_times['luria_delbrueck_report'] = ld_report_time
-    except Exception as e:
-        log.error(f"Error creating Luria-Delbrück report: {str(e)}")
-    
-    # 9. Create execution time summary
+    # 6. Create execution time summary
     create_time_summary(elapsed_times, args.results_path)
     
     log.info("\n" + "="*50)
@@ -1053,639 +832,6 @@ def run_all_models(args):
     log.info(f"Total execution time: {total_time:.2f} seconds")
     
     return results, stats, elapsed_times
-
-def create_visualizations(survivors_list, model_name, results_path):
-    """Create improved visualizations specifically for Luria-Delbrück analysis for individual models"""
-    try:
-        import matplotlib.pyplot as plt
-        import seaborn as sns
-        import numpy as np
-        from matplotlib.gridspec import GridSpec
-        
-        # Set style for better visualizations
-        plt.style.use('seaborn-v0_8-whitegrid')
-        plt.rcParams['font.size'] = 12
-        plt.rcParams['axes.titlesize'] = 14
-        plt.rcParams['axes.labelsize'] = 12
-        
-        # Create figure with custom layout
-        fig = plt.figure(figsize=(16, 14))
-        gs = GridSpec(2, 2, figure=fig)
-        
-        # Color scheme based on model
-        model_colors = {
-            'random': 'royalblue', 
-            'induced': 'firebrick', 
-            'combined': 'forestgreen'
-        }
-        color = model_colors.get(model_name, 'purple')
-        
-        # Calculate key statistics for annotations
-        mean_val = np.mean(survivors_list)
-        var_val = np.var(survivors_list)
-        std_val = np.std(survivors_list)
-        cv_val = std_val / mean_val if mean_val > 0 else 0
-        vmr_val = var_val / mean_val if mean_val > 0 else 0
-        
-        # 1. Standard histogram with KDE (top left)
-        ax1 = fig.add_subplot(gs[0, 0])
-        sns.histplot(survivors_list, kde=True, ax=ax1, color=color, alpha=0.7, edgecolor='k')
-        ax1.set_xlabel("Number of Resistant Survivors")
-        ax1.set_ylabel("Frequency")
-        ax1.set_title(f"{model_name.capitalize()} Model: Distribution of Resistant Survivors", fontweight='bold')
-        
-        # Add statistics annotation
-        stats_text = f"Mean: {mean_val:.2f}\nStd Dev: {std_val:.2f}\nCV: {cv_val:.2f}\nVMR: {vmr_val:.2f}"
-        ax1.text(0.02, 0.95, stats_text, transform=ax1.transAxes, 
-                fontsize=11, verticalalignment='top', 
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-        
-        # 2. Log-scale histogram - KEY for Luria-Delbrück (top right)
-        ax2 = fig.add_subplot(gs[0, 1])
-        
-        if max(survivors_list) > 0:
-            # Handle zeros for log scale properly
-            nonzero_data = [x for x in survivors_list if x > 0]
-            if len(nonzero_data) > 0:
-                # Add a small value for log binning to work
-                nonzero_data = [x + 0.1 for x in nonzero_data]
-                min_val = min(nonzero_data)
-                max_val = max(nonzero_data)
-                
-                # Create log-spaced bins
-                bins = np.logspace(np.log10(min_val), np.log10(max_val), 30)
-                
-                # Plot the histogram
-                ax2.hist(nonzero_data, bins=bins, alpha=0.7, color=color, edgecolor='k')
-                ax2.set_xscale('log')
-                ax2.set_xlabel("Number of Resistant Survivors (log scale)")
-                ax2.set_ylabel("Frequency")
-                ax2.set_title("Log-Scale Distribution", fontweight='bold')
-                
-                # Add note explaining log scale
-                ax2.text(0.02, 0.02, "Note: Log scale helps visualize\nskewed distributions", 
-                        transform=ax2.transAxes, fontsize=10, verticalalignment='bottom',
-                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-                
-                # For random model, add note about Luria-Delbrück signature
-                if model_name == 'random' and vmr_val > 1:
-                    ax2.text(0.98, 0.98, "Wide spread on log scale is\ncharacteristic of Luria-Delbrück\ndistribution", 
-                            transform=ax2.transAxes, fontsize=10, ha='right', va='top',
-                            bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
-        
-        # 3. CCDF plot (bottom left) - Excellent for showing power-law type distributions
-        ax3 = fig.add_subplot(gs[1, 0])
-        sorted_data = np.sort(survivors_list)
-        ccdf = 1 - np.arange(1, len(sorted_data) + 1) / len(sorted_data)
-        
-        # Plot with thicker line and markers for better visibility
-        ax3.step(sorted_data, ccdf, where='post', color=color, linewidth=2.5)
-        ax3.set_xscale('log')
-        ax3.set_yscale('log')
-        ax3.set_xlabel("Number of Resistant Survivors (log scale)")
-        ax3.set_ylabel("P(X > x) (log scale)")
-        ax3.set_title("Complementary Cumulative Distribution Function", fontweight='bold')
-        ax3.grid(True, which="both", ls="-", alpha=0.2)
-        
-        # Add note on CCDF interpretation
-        if model_name == 'random':
-            note = "A straight line on log-log CCDF plot\nindicates a power-law-like distribution,\ncharacteristic of Luria-Delbrück"
-        elif model_name == 'induced':
-            note = "Curved line on log-log CCDF plot\nis characteristic of Poisson-like distributions\nexpected for induced mutations"
-        else:
-            note = "CCDF shape reveals distribution characteristics:\nStraight line = power-law-like (Luria-Delbrück)\nCurved line = Poisson-like"
-            
-        ax3.text(0.02, 0.02, note, transform=ax3.transAxes, fontsize=10, verticalalignment='bottom',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-        
-        # 4. Theoretical comparison for specific models (bottom right)
-        ax4 = fig.add_subplot(gs[1, 1])
-        
-        if model_name in ["random", "induced"]:
-            # Generate theoretical data for comparison
-            if model_name == "random":
-                # Use log-normal as an approximation to Luria-Delbrück distribution
-                mean_log, sigma_log = 0, 1  # Parameters can be adjusted
-                theoretical_data = np.random.lognormal(mean_log, sigma_log, size=10000)
-                # Scale to match mean of empirical data
-                scaling_factor = mean_val / np.mean(theoretical_data)
-                theoretical_data = theoretical_data * scaling_factor
-                
-                ax4.set_title("Random Model vs. Theoretical Luria-Delbrück", fontweight='bold')
-                note = "Luria-Delbrück distributions are characterized by:\n- High variance-to-mean ratio (VMR > 1)\n- Long right tail ('jackpot' events)\n- Similar to log-normal shape"
-            else:
-                # Simulate Poisson distribution for induced model
-                theoretical_data = np.random.poisson(mean_val, size=10000)
-                ax4.set_title("Induced Model vs. Theoretical Poisson", fontweight='bold')
-                note = "Poisson distributions are characterized by:\n- VMR ≈ 1\n- More symmetrical distribution\n- More predictable outcomes"
-            
-            # Plot both distributions using KDE for smoother visualization
-            sns.kdeplot(survivors_list, ax=ax4, color=color, linewidth=2.5, label="Simulation data")
-            sns.kdeplot(theoretical_data, ax=ax4, color='gray', linewidth=2, linestyle='--', label="Theoretical distribution")
-            
-            # Set axis labels
-            ax4.set_xlabel("Number of Resistant Survivors")
-            ax4.set_ylabel("Probability Density")
-            ax4.legend(loc='best')
-            
-            # Add note on theoretical comparison
-            ax4.text(0.02, 0.02, note, transform=ax4.transAxes, fontsize=10, verticalalignment='bottom',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-            
-            # Show VMR comparison
-            theo_vmr = np.var(theoretical_data) / np.mean(theoretical_data)
-            vmr_text = f"VMR Comparison:\n- Empirical: {vmr_val:.2f}\n- Theoretical: {theo_vmr:.2f}"
-            ax4.text(0.98, 0.98, vmr_text, transform=ax4.transAxes, fontsize=10, 
-                    ha='right', va='top', bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
-        else:
-            # For combined model, show histogram with density curve
-            sns.histplot(survivors_list, kde=True, ax=ax4, color=color, alpha=0.6, edgecolor='k')
-            ax4.set_xlabel("Number of Resistant Survivors")
-            ax4.set_ylabel("Frequency")
-            ax4.set_title("Combined Model Distribution", fontweight='bold')
-            
-            # Calculate quartiles for additional stats
-            q1, median, q3 = np.percentile(survivors_list, [25, 50, 75])
-            iqr = q3 - q1
-            
-            # Add detailed stats
-            stats_text = (f"Distribution Statistics:\n"
-                        f"- Mean: {mean_val:.2f}\n"
-                        f"- Median: {median:.2f}\n"
-                        f"- 1st Quartile: {q1:.2f}\n"
-                        f"- 3rd Quartile: {q3:.2f}\n"
-                        f"- IQR: {iqr:.2f}\n"
-                        f"- VMR: {vmr_val:.2f}")
-            ax4.text(0.98, 0.98, stats_text, transform=ax4.transAxes, fontsize=10, 
-                    ha='right', va='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-        
-        plt.tight_layout()
-        save_path = os.path.join(results_path, f"improved_analysis_{model_name}.png")
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        # Create a specialized log-scale plot for better visualization of skewness
-        plt.figure(figsize=(10, 8))
-        
-        # For random model, focus on log-log CCDF which best shows Luria-Delbrück characteristics
-        if model_name == "random":
-            plt.step(sorted_data, ccdf, where='post', color=color, linewidth=3)
-            plt.xscale('log')
-            plt.yscale('log')
-            plt.xlabel("Number of Resistant Survivors (log scale)")
-            plt.ylabel("P(X > x) (log scale)")
-            plt.title("Random Model: Log-Log CCDF Plot", fontweight='bold')
-            plt.grid(True, which="both", ls="-", alpha=0.3)
-            
-            # Add annotation explaining significance
-            plt.figtext(0.5, 0.01, 
-                        "A straight line on this log-log plot indicates a power-law-like distribution,\n"
-                        "which is a key signature of the Luria-Delbrück experiment showing spontaneous mutations.",
-                        ha='center', fontsize=11, bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
-        else:
-            # For other models, show log-scale histogram
-            nonzero_data = [x + 0.1 for x in survivors_list if x > 0]
-            if len(nonzero_data) > 0:
-                bins = np.logspace(np.log10(min(nonzero_data)), np.log10(max(nonzero_data)), 30)
-                plt.hist(nonzero_data, bins=bins, alpha=0.7, color=color, edgecolor='k')
-                plt.xscale('log')
-                plt.xlabel("Number of Resistant Survivors (log scale)")
-                plt.ylabel("Frequency")
-                plt.title(f"{model_name.capitalize()} Model: Log-Scale Histogram", fontweight='bold')
-                plt.grid(True, which="both", ls="-", alpha=0.3)
-        
-        plt.tight_layout()
-        log_save_path = os.path.join(results_path, f"log_scale_analysis_{model_name}.png")
-        plt.savefig(log_save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        return save_path, 0  # Return path and time = 0 (timing handled by decorator)
-        
-    except ImportError as e:
-        log.warning(f"Visualization libraries not available: {e}")
-        return None, 0
-    except Exception as e:
-        log.error(f"Error creating improved visualizations: {str(e)}")
-        import traceback
-        log.error(traceback.format_exc())
-        return None, 0
-        
-def create_luria_delbrueck_comparison(results_dict, results_path):
-    """Create specialized visualizations comparing random vs induced models with improved clarity"""
-    try:
-        import matplotlib.pyplot as plt
-        import seaborn as sns
-        import numpy as np
-        from matplotlib.gridspec import GridSpec
-        
-        if 'random' not in results_dict or 'induced' not in results_dict:
-            return None, 0
-            
-        random_data = results_dict['random']
-        induced_data = results_dict['induced']
-        
-        # Set the style for better aesthetics
-        plt.style.use('seaborn-v0_8-whitegrid')
-        plt.rcParams['font.size'] = 12
-        plt.rcParams['axes.titlesize'] = 14
-        plt.rcParams['axes.labelsize'] = 12
-        
-        # Create figure with custom grid layout
-        fig = plt.figure(figsize=(16, 14))
-        gs = GridSpec(2, 2, figure=fig)
-        
-        # 1. CCDF Comparison - most informative plot (top left)
-        ax1 = fig.add_subplot(gs[0, 0])
-        
-        # Process random data
-        sorted_random = np.sort(random_data)
-        ccdf_random = 1 - np.arange(1, len(sorted_random) + 1) / len(sorted_random)
-        
-        # Process induced data
-        sorted_induced = np.sort(induced_data)
-        ccdf_induced = 1 - np.arange(1, len(sorted_induced) + 1) / len(sorted_induced)
-        
-        # Plot both on same axes with thicker lines and markers for better visibility
-        ax1.step(sorted_random, ccdf_random, where='post', color='blue', 
-                label='Random (Darwinian) Model', linewidth=2.5)
-        ax1.step(sorted_induced, ccdf_induced, where='post', color='red', 
-                label='Induced (Lamarckian) Model', linewidth=2.5, linestyle='--')
-        
-        ax1.set_xscale('log')
-        ax1.set_yscale('log')
-        ax1.set_xlabel("Number of Resistant Survivors (log scale)")
-        ax1.set_ylabel("P(X > x) (log scale)")
-        ax1.set_title("Complementary Cumulative Distribution Function", fontweight='bold')
-        ax1.legend(loc='best', frameon=True, fancybox=True, shadow=True)
-        ax1.grid(True, which="both", ls="-", alpha=0.2)
-        
-        # 2. Separate PDF plots for better visibility (top right)
-        ax2 = fig.add_subplot(gs[0, 1])
-        
-        # Create two separate subplots within this area
-        divider = make_axes_locatable(ax2)
-        ax2_random = ax2
-        ax2_induced = divider.append_axes("bottom", size="40%", pad=0.6)
-        
-        # Plot Random model PDF
-        sns.kdeplot(random_data, ax=ax2_random, color='blue', linewidth=2.5, label="Random Model")
-        ax2_random.set_xlabel("")  # Remove xlabel as it will be on the bottom subplot
-        ax2_random.set_ylabel("Probability Density")
-        ax2_random.set_title("Probability Density Functions (Separate Scales)", fontweight='bold')
-        ax2_random.legend(loc='upper right')
-        ax2_random.grid(True, alpha=0.3)
-        
-        # Plot Induced model PDF
-        sns.kdeplot(induced_data, ax=ax2_induced, color='red', linewidth=2.5, label="Induced Model")
-        ax2_induced.set_xlabel("Number of Resistant Survivors")
-        ax2_induced.set_ylabel("Probability Density")
-        ax2_induced.legend(loc='upper right')
-        ax2_induced.grid(True, alpha=0.3)
-        
-        # 3. Separate histograms with appropriate scales (bottom left)
-        ax3 = fig.add_subplot(gs[1, 0])
-        
-        # Create separate subplot areas
-        divider = make_axes_locatable(ax3)
-        ax3_random = ax3
-        ax3_induced = divider.append_axes("right", size="30%", pad=0.6)
-        
-        # Plot Random model histogram
-        ax3_random.hist(random_data, bins=30, alpha=0.7, color='blue', edgecolor='black')
-        ax3_random.set_xlabel("Number of Resistant Survivors")
-        ax3_random.set_ylabel("Frequency")
-        ax3_random.set_title("Histograms (Separate Scales)", fontweight='bold')
-        ax3_random.text(0.05, 0.95, "Random Model", transform=ax3_random.transAxes, 
-                 fontsize=12, fontweight='bold', verticalalignment='top', 
-                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
-        
-        # Plot Induced model histogram
-        ax3_induced.hist(induced_data, bins=30, alpha=0.7, color='red', edgecolor='black')
-        ax3_induced.set_xlabel("Number")
-        ax3_induced.set_ylabel("")  # No ylabel on right plot
-        ax3_induced.text(0.05, 0.95, "Induced Model", transform=ax3_induced.transAxes, 
-                 fontsize=12, fontweight='bold', verticalalignment='top', 
-                 bbox=dict(boxstyle='round', facecolor='mistyrose', alpha=0.5))
-        
-        # 4. Key statistics in a styled text box (bottom right)
-        ax4 = fig.add_subplot(gs[1, 1])
-        ax4.axis('off')
-        
-        # Calculate statistics for both distributions
-        random_mean = np.mean(random_data)
-        random_var = np.var(random_data)
-        random_std = np.std(random_data)
-        random_cv = random_std / random_mean if random_mean > 0 else 0
-        random_vmr = random_var / random_mean if random_mean > 0 else 0
-        
-        induced_mean = np.mean(induced_data)
-        induced_var = np.var(induced_data)
-        induced_std = np.std(induced_data)
-        induced_cv = induced_std / induced_mean if induced_mean > 0 else 0
-        induced_vmr = induced_var / induced_mean if induced_mean > 0 else 0
-        
-        # Create VMR comparison bar chart
-        divider = make_axes_locatable(ax4)
-        ax4_chart = divider.append_axes("bottom", size="40%", pad=0.2)
-        
-        models = ['Random', 'Induced']
-        vmr_values = [random_vmr, induced_vmr]
-        colors = ['blue', 'red']
-        
-        bars = ax4_chart.bar(models, vmr_values, color=colors, alpha=0.7, edgecolor='black')
-        ax4_chart.set_yscale('log')  # Log scale for better comparison with high disparity
-        ax4_chart.set_ylabel('VMR (log scale)')
-        ax4_chart.set_title('Variance-to-Mean Ratio Comparison', fontweight='bold')
-        
-        # Add value labels on bars
-        for bar in bars:
-            height = bar.get_height()
-            ax4_chart.text(bar.get_x() + bar.get_width()/2., height * 1.1,
-                   f'{height:.2f}', ha='center', va='bottom', rotation=0,
-                   fontweight='bold')
-        
-        # Create a text summary
-        text = f
-        """
-        LURIA-DELBRUECK ANALYSIS RESULTS:
-        
-        RANDOM (DARWINIAN) MODEL:
-        * Mean: {random_mean:.2f}
-        * Standard Deviation: {random_std:.2f} 
-        * Variance: {random_var:.2f}
-        * Coefficient of Variation: {random_cv:.2f}
-        * Variance-to-Mean Ratio: {random_vmr:.2f}
-        * Zero resistant cultures: {sum(1 for x in random_data if x == 0)} 
-        
-        INDUCED (LAMARCKIAN) MODEL:
-        * Mean: {induced_mean:.2f}
-        * Standard Deviation: {induced_std:.2f}
-        * Variance: {induced_var:.2f}
-        * Coefficient of Variation: {induced_cv:.2f}
-        * Variance-to-Mean Ratio: {induced_vmr:.2f}
-        * Zero resistant cultures: {sum(1 for x in induced_data if x == 0)}
-        
-        KEY FINDING: {'Random model has higher variance (supporting Luria-Delbrueck)' 
-                    if random_vmr > induced_vmr else 'Results inconclusive'}
-        
-        RATIO COMPARISON:
-        * Random/Induced VMR Ratio: {random_vmr/induced_vmr:.2f}
-        * Random/Induced CV Ratio: {random_cv/induced_cv:.2f}
-        """
-        
-        # Add styled text box
-        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-        ax4.text(0.05, 0.95, text, transform=ax4.transAxes, 
-                fontsize=11, verticalalignment='top', 
-                bbox=props, linespacing=1.5)
-        
-        plt.tight_layout()
-        save_path = os.path.join(results_path, "luria_delbrueck_direct_comparison.png")
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        # Create a second figure for log-scale comparisons
-        fig2 = plt.figure(figsize=(12, 10))
-        
-        # Log-scale histogram comparison
-        ax1 = fig2.add_subplot(111)
-        
-        # Handle zeros for log scale
-        nonzero_random = [x + 0.1 for x in random_data if x > 0]
-        nonzero_induced = [x + 0.1 for x in induced_data if x > 0]
-        
-        max_value = max(max(nonzero_random), max(nonzero_induced))
-        min_value = min(min(nonzero_random), min(nonzero_induced))
-        
-        bins = np.logspace(np.log10(min_value), np.log10(max_value), 30)
-        
-        ax1.hist(nonzero_random, bins=bins, alpha=0.5, color='blue', label="Random Model")
-        ax1.hist(nonzero_induced, bins=bins, alpha=0.5, color='red', label="Induced Model")
-        ax1.set_xscale('log')
-        ax1.set_xlabel("Number of Resistant Survivors (log scale)")
-        ax1.set_ylabel("Frequency")
-        ax1.set_title("Log-Scale Distribution Comparison", fontweight='bold')
-        ax1.legend(loc='upper left')
-        ax1.grid(True, which="both", alpha=0.3)
-        
-        # Add annotation explaining the log scale
-        explanation = """
-                    Note: This plot uses logarithmic scaling on the x-axis to better
-                    display the distributions when they have very different ranges.
-                    The Random (Darwinian) model typically shows a wider spread.
-                    """
-        
-        ax1.text(0.02, 0.02, explanation, transform=ax1.transAxes,
-                fontsize=10, verticalalignment='bottom',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-        
-        plt.tight_layout()
-        log_save_path = os.path.join(results_path, "luria_delbrueck_log_comparison.png")
-        plt.savefig(log_save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        return save_path, 0
-    except ImportError as e:
-        log.warning(f"Visualization libraries not available: {e}")
-        return None, 0
-    except Exception as e:
-        log.error(f"Error creating comparison visualizations: {str(e)}")
-        import traceback
-        log.error(traceback.format_exc())
-        return None, 0
-
-def create_luria_delbrueck_report(stats, results, args, results_path):
-    """Create a report specifically focused on Luria-Delbrück analysis"""
-    report_path = os.path.join(results_path, "luria_delbrueck_detailed_report.txt")
-    
-    with open(report_path, 'w') as f:
-        f.write("="*80 + "\n")
-        f.write("LURIA-DELBRÜCK EXPERIMENT: DETAILED ANALYSIS\n")
-        f.write("="*80 + "\n\n")
-        
-        # Write introduction
-        f.write("BACKGROUND\n")
-        f.write("-"*80 + "\n\n")
-        f.write("The Luria-Delbrück experiment (1943) was a pivotal study that demonstrated\n")
-        f.write("that mutations in bacteria occur spontaneously rather than as a direct response\n") 
-        f.write("to selection. The key insight was that spontaneous mutations occurring during\n")
-        f.write("bacterial growth would produce a characteristic distribution of mutant counts\n")
-        f.write("with high variance ('jackpot' cultures), while induced mutations would produce\n")
-        f.write("a more uniform distribution (approximately Poisson).\n\n")
-        
-        # Write simulation parameters
-        f.write("SIMULATION PARAMETERS\n")
-        f.write("-"*80 + "\n\n")
-        f.write(f"Number of cultures: {args.num_cultures}\n")
-        f.write(f"Initial population size: {args.initial_population_size}\n")
-        f.write(f"Number of generations: {args.num_generations}\n")
-        f.write(f"Random mutation rate: {args.mutation_rate}\n")
-        f.write(f"Induced mutation rate: {args.induced_mutation_rate}\n")
-        final_pop_size = args.initial_population_size * (2 ** args.num_generations)
-        f.write(f"Final population size per culture: {final_pop_size}\n\n")
-        
-        # Key results focusing on Luria-Delbrück analysis
-        f.write("KEY RESULTS\n")
-        f.write("-"*80 + "\n\n")
-        
-        # Calculate variance-to-mean ratios
-        random_mean = stats['random']['mean']
-        random_var = stats['random']['variance']
-        random_vmr = random_var / random_mean if random_mean > 0 else 0
-        
-        induced_mean = stats['induced']['mean']
-        induced_var = stats['induced']['variance']
-        induced_vmr = induced_var / induced_mean if induced_mean > 0 else 0
-        
-        # Determine which distribution patterns are observed
-        f.write("Distribution Characteristics:\n\n")
-        
-        # Random model analysis
-        f.write("1. Random (Darwinian) Model:\n")
-        f.write(f"   - Mean mutants per culture: {random_mean:.2f}\n")
-        f.write(f"   - Variance: {random_var:.2f}\n")
-        f.write(f"   - Variance-to-Mean Ratio: {random_vmr:.2f}\n")
-        
-        if random_vmr > 1.5:
-            f.write("   - Result: High variance-to-mean ratio SUPPORTS the Luria-Delbrück hypothesis\n")
-            f.write("     This indicates spontaneous mutations during growth (Darwinian model)\n")
-        elif random_vmr > 1.0:
-            f.write("   - Result: Moderate variance-to-mean ratio weakly supports the Luria-Delbrück hypothesis\n")
-            f.write("     Consider increasing generations or adjusting mutation rate for clearer results\n")
-        else:
-            f.write("   - Result: Low variance-to-mean ratio does NOT support the Luria-Delbrück hypothesis\n")
-            f.write("     Consider reviewing simulation parameters\n")
-        
-        # Check for jackpot cultures
-        if 'random' in results:
-            random_data = results['random']
-            max_random = max(random_data)
-            mean_random = np.mean(random_data)
-            
-            if max_random > 5 * mean_random:
-                f.write(f"   - 'Jackpot' cultures detected: Max value ({max_random}) > 5× mean ({mean_random:.2f})\n")
-                f.write("     This is characteristic of the Luria-Delbrück distribution\n")
-            else:
-                f.write(f"   - No strong 'jackpot' cultures detected: Max value ({max_random}) not much larger than mean\n")
-                f.write("     Consider increasing generations or population size\n")
-        f.write("\n")
-        
-        # Induced model analysis
-        f.write("2. Induced (Lamarckian) Model:\n")
-        f.write(f"   - Mean mutants per culture: {induced_mean:.2f}\n")
-        f.write(f"   - Variance: {induced_var:.2f}\n")
-        f.write(f"   - Variance-to-Mean Ratio: {induced_vmr:.2f}\n")
-        
-        if 0.9 <= induced_vmr <= 1.1:
-            f.write("   - Result: Variance-to-Mean ratio ≈ 1 indicates a Poisson-like distribution\n")
-            f.write("     This is expected for the induced mutation model\n")
-        else:
-            f.write(f"   - Result: Variance-to-Mean ratio = {induced_vmr:.2f} deviates from the expected Poisson-like distribution\n")
-            f.write("     This may indicate simulation parameters need adjustment\n")
-        f.write("\n")
-        
-        # Comparative analysis
-        f.write("3. Comparative Analysis:\n")
-        if random_vmr > induced_vmr * 2:
-            f.write(f"   - Random model VMR ({random_vmr:.2f}) is > 2× Induced model VMR ({induced_vmr:.2f})\n")
-            f.write("   - Result: STRONG SUPPORT for the Luria-Delbrück hypothesis\n")
-        elif random_vmr > induced_vmr:
-            f.write(f"   - Random model VMR ({random_vmr:.2f}) > Induced model VMR ({induced_vmr:.2f})\n")
-            f.write("   - Result: MODERATE SUPPORT for the Luria-Delbrück hypothesis\n")
-        else:
-            f.write(f"   - Random model VMR ({random_vmr:.2f}) <= Induced model VMR ({induced_vmr:.2f})\n")
-            f.write("   - Result: DOES NOT SUPPORT the Luria-Delbrück hypothesis\n")
-            f.write("     Consider adjusting simulation parameters\n")
-        f.write("\n")
-        
-        # Mutation rate estimation
-        f.write("MUTATION RATE ESTIMATION\n")
-        f.write("-"*80 + "\n\n")
-        
-        # p0 method
-        f.write("1. p0 Method (Luria-Delbrück):\n")
-        if 'random' in results:
-            zero_count = sum(1 for x in results['random'] if x == 0)
-            total_cultures = len(results['random'])
-            if zero_count > 0 and zero_count < total_cultures:
-                p0 = zero_count / total_cultures
-                mutation_rate_estimate = -np.log(p0) / final_pop_size
-                f.write(f"   - Cultures with zero mutants: {zero_count} ({p0*100:.2f}% of total)\n")
-                f.write(f"   - Estimated mutation rate: {mutation_rate_estimate:.8f}\n")
-                f.write(f"   - Actual mutation rate used: {args.mutation_rate:.8f}\n")
-                accuracy = (mutation_rate_estimate / args.mutation_rate) * 100
-                f.write(f"   - Estimation accuracy: {accuracy:.2f}%\n")
-            else:
-                f.write("   - Cannot calculate: All cultures have mutants or all cultures have zero mutants\n")
-        f.write("\n")
-        
-        # Use median method
-        if 'random' in results:
-            random_data = results['random']
-            median_value = np.median(random_data)
-            if median_value > 0:
-                # Using median approximation formula (simplified)
-                median_estimate = np.log(2) / (final_pop_size * median_value)
-                f.write("2. Median Method:\n")
-                f.write(f"   - Median mutants per culture: {median_value}\n")
-                f.write(f"   - Estimated mutation rate: {median_estimate:.8f}\n")
-                f.write(f"   - Actual mutation rate used: {args.mutation_rate:.8f}\n")
-                accuracy = (median_estimate / args.mutation_rate) * 100
-                f.write(f"   - Estimation accuracy: {accuracy:.2f}%\n\n")
-        
-        # Write visualization guide
-        f.write("VISUALIZATION GUIDE\n")
-        f.write("-"*80 + "\n\n")
-        f.write("The following visualizations are particularly informative for Luria-Delbrück analysis:\n\n")
-        f.write("1. Log-Log CCDF Plot:\n")
-        f.write("   - A straight line on this plot indicates a power-law-like distribution\n")
-        f.write("   - Random mutation model should show a more linear pattern\n")
-        f.write("   - Induced mutation model should show more curvature (Poisson-like)\n\n")
-        
-        f.write("2. Log-Scale Histogram:\n")
-        f.write("   - Look for the 'long tail' in the random mutation model\n")
-        f.write("   - This represents 'jackpot' cultures with many more mutants than average\n\n")
-        
-        f.write("3. Theoretical Distribution Comparison:\n")
-        f.write("   - Random model is compared to a log-normal approximation (similar shape to Luria-Delbrück)\n")
-        f.write("   - Induced model is compared to a Poisson distribution\n\n")
-        
-        # Write conclusion
-        f.write("CONCLUSION\n")
-        f.write("-"*80 + "\n\n")
-        if random_vmr > induced_vmr:
-            f.write("The simulation results SUPPORT the Luria-Delbrück hypothesis that mutations occur\n")
-            f.write("randomly during growth rather than in response to selection. This is evidenced by:\n")
-            f.write(f"1. Higher variance-to-mean ratio in the random model ({random_vmr:.2f}) compared\n")
-            f.write(f"   to the induced model ({induced_vmr:.2f})\n")
-            if 'random' in results and max(results['random']) > 5 * np.mean(results['random']):
-                f.write("2. The presence of 'jackpot' cultures in the random model\n")
-            f.write("3. Distribution patterns characteristic of spontaneous mutation\n\n")
-        else:
-            f.write("The current simulation parameters do not clearly demonstrate the Luria-Delbrück effect.\n")
-            f.write("To better observe the characteristic distribution patterns, consider:\n")
-            f.write("1. Reducing the mutation rate (e.g., to 0.0001)\n")
-            f.write("2. Increasing the number of generations (e.g., to 15-20)\n")
-            f.write("3. Increasing the initial population size (e.g., to 50-100)\n")
-            f.write("4. Increasing the number of cultures (e.g., to 5000)\n\n")
-        
-        f.write("HISTORICAL CONTEXT\n")
-        f.write("-"*80 + "\n\n")
-        f.write("The Luria-Delbrück experiment provided compelling evidence against the Lamarckian view\n")
-        f.write("that bacteria develop resistance in response to antibiotics or phages. Instead, it\n")
-        f.write("supported the Darwinian view that random mutations conferring resistance occur\n")
-        f.write("spontaneously during normal growth, before exposure to selective agents.\n\n")
-        
-        f.write("This experiment, known as the 'fluctuation test,' was a cornerstone in establishing\n")
-        f.write("that bacteria follow the same evolutionary principles as higher organisms. Luria and\n")
-        f.write("Delbrück were awarded the Nobel Prize in 1969 for this and other pioneering work in\n")
-        f.write("bacterial genetics.\n\n")
-        
-        f.write("The mathematical framework they developed continues to be used today to estimate\n")
-        f.write("mutation rates in bacteria and other microorganisms.\n")
-    
-    log.info(f"Luria-Delbrück detailed report created at {report_path}")
-    return report_path
 
 def create_comparison_report(stats, results_path, elapsed_times=None):
     """Create a text report comparing the statistics of all models."""
@@ -1710,21 +856,25 @@ def create_comparison_report(stats, results_path, elapsed_times=None):
             f.write(f"- Additional genes ({Organism.N_GENES-1}) are tracked but do not affect resistance\n")
         f.write("\n")
 
-
         # Get coefficient of variation for all models
         cv_random = stats['random']['coefficient_of_variation']
         cv_induced = stats['induced']['coefficient_of_variation']
         cv_combined = stats['combined']['coefficient_of_variation']
         
+        # Calculate variance-to-mean ratios
+        vmr_random = stats['random']['variance_to_mean_ratio'] if 'variance_to_mean_ratio' in stats['random'] else stats['random']['variance'] / stats['random']['mean']
+        vmr_induced = stats['induced']['variance_to_mean_ratio'] if 'variance_to_mean_ratio' in stats['induced'] else stats['induced']['variance'] / stats['induced']['mean']
+        vmr_combined = stats['combined']['variance_to_mean_ratio'] if 'variance_to_mean_ratio' in stats['combined'] else stats['combined']['variance'] / stats['combined']['mean']
+        
         # Determine key findings
-        if cv_random > cv_induced:
-            f.write(f"- The Random model shows higher variance (CV = {cv_random:.2f}) than the Induced model ")
-            f.write(f"(CV = {cv_induced:.2f}), consistent with Luria & Delbrück's findings supporting Darwinian evolution.\n")
+        if vmr_random > vmr_induced:
+            f.write(f"- The Random model shows higher variance-to-mean ratio (VMR = {vmr_random:.2f}) than the Induced model ")
+            f.write(f"(VMR = {vmr_induced:.2f}), consistent with Luria & Delbrück's findings supporting Darwinian evolution.\n")
         else:
-            f.write(f"- NOTE: Unexpected result - the Induced model shows higher variance than Random model.\n")
+            f.write(f"- NOTE: Unexpected result - the Induced model shows higher VMR than Random model.\n")
             f.write(f"  This may be due to parameter choices or statistical fluctuation in the simulation.\n")
         
-        f.write(f"- The Combined model (CV = {cv_combined:.2f}) exhibits characteristics of both mechanisms.\n\n")
+        f.write(f"- The Combined model (VMR = {vmr_combined:.2f}) exhibits characteristics of both mechanisms.\n\n")
         
         # Write detailed statistics table
         f.write("-"*80 + "\n")
@@ -1743,14 +893,21 @@ def create_comparison_report(stats, results_path, elapsed_times=None):
             ('median', 'Median'),
             ('max', 'Maximum'),
             ('coefficient_of_variation', 'Coef. of Variation'),
+            ('variance_to_mean_ratio', 'VMR'),
             ('zero_resistant_cultures', 'Zero Resistant Count'),
             ('zero_resistant_percent', 'Zero Resistant %')
         ]
         
         for key, label in stats_to_include:
-            r_val = stats['random'][key]
-            i_val = stats['induced'][key]
-            c_val = stats['combined'][key]
+            # Handle VMR which might be calculated or directly stored
+            if key == 'variance_to_mean_ratio':
+                r_val = vmr_random
+                i_val = vmr_induced
+                c_val = vmr_combined
+            else:
+                r_val = stats['random'].get(key, 'N/A')
+                i_val = stats['induced'].get(key, 'N/A')
+                c_val = stats['combined'].get(key, 'N/A')
             
             # Format based on magnitude
             if isinstance(r_val, (int, float)) and r_val < 100:
@@ -1798,9 +955,9 @@ def create_comparison_report(stats, results_path, elapsed_times=None):
         f.write("In contrast, the induced model predicts that mutations only occur in response to selection\n")
         f.write("pressure, which would produce a Poisson distribution with lower variance (variance ≈ mean).\n\n")
         
-        if cv_random > cv_induced:
+        if vmr_random > vmr_induced:
             f.write("The simulation results support the historical findings: the random model shows significantly\n")
-            f.write("higher variation, as measured by the coefficient of variation (CV = std.dev/mean).\n\n")
+            f.write("higher variation, as measured by the variance-to-mean ratio (VMR).\n\n")
         else:
             f.write("NOTE: The simulation parameters may need adjustment, as the historical finding of higher\n")
             f.write("variance in the random model is not clearly demonstrated with the current settings.\n\n")
@@ -1951,30 +1108,28 @@ def main():
     if not os.path.exists(args.Results_path):
         os.makedirs(args.Results_path)
     
-    # Create timestamped subdirectory
+    # Create timestamped subdirectory with all parameters
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     subdir = os.path.join(
         args.Results_path,
-        f"params_model_{args.model}_num_cultures_{args.num_cultures}_pop_size_{args.initial_population_size}_gens_{args.num_generations}_mut_rate_{args.mutation_rate}_induced_mut_rate_{args.induced_mutation_rate}_n_genes_{args.n_genes}_parallel_{args.use_parallel}_timestamp_{timestamp}"
+        f"luria_delbruck_model_{args.model}_cultures_{args.num_cultures}_popsize_{args.initial_population_size}_gens_{args.num_generations}_mutrate_{args.mutation_rate}_indmutrate_{args.induced_mutation_rate}_ngenes_{args.n_genes}_parallel_{args.use_parallel}_{timestamp}"
     )
     os.makedirs(subdir, exist_ok=True)
 
     # Initialize logging with timestamp subfolder
     logger, args.results_path = init_log(subdir, args.log_level)
 
-    # apply _get_lsf_job_details to get the job details
+    # Apply _get_lsf_job_details to get the job details
     job_details = _get_lsf_job_details()
-    if job_details:
+    if any(detail.split(': ')[1] for detail in job_details):
         # log the job details
         logger.info(f"Job details: {job_details}")
     else:
-        logger.info("Job details not found")
+        logger.info("No LSF job details available")
     
     # Log simulation parameters
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    current_time = datetime.now().strftime("%H:%M:%S")
-    logger.info(f"Starting simulation on this date {date} the time is {current_time}")
-    logger.info(f"The name of the file is {__file__}")
+    logger.info(f"Starting simulation on {date}")
     logger.info(f"Simulation parameters:")
     logger.info(f"Model: {args.model}")
     logger.info(f"Number of cultures: {args.num_cultures}")
@@ -2002,58 +1157,34 @@ def main():
             results, stats, times = run_all_models(args)
         else:
             # Profile a single model run
-            if args.model == "random":
-                func = simulate_random_mutations
-                kwargs = {
-                    "num_cultures": args.num_cultures,
-                    "initial_population_size": args.initial_population_size,
-                    "num_generations": args.num_generations,
-                    "mutation_rate": args.mutation_rate,
-                    "use_parallel": args.use_parallel,
-                    "n_processes": args.n_processes
-                }
-            elif args.model == "induced":
-                func = simulate_induced_mutations
-                kwargs = {
-                    "num_cultures": args.num_cultures,
-                    "initial_population_size": args.initial_population_size,
-                    "num_generations": args.num_generations,
-                    "mutation_rate": args.mutation_rate,
-                    "use_parallel": args.use_parallel,
-                    "n_processes": args.n_processes
-                }
-            else:  # "combined"
-                func = simulate_combined_mutations
-                kwargs = {
-                    "num_cultures": args.num_cultures,
-                    "initial_population_size": args.initial_population_size,
-                    "num_generations": args.num_generations,
-                    "random_mut_rate": args.mutation_rate,
-                    "induced_mut_rate": args.induced_mutation_rate,
-                    "use_parallel": args.use_parallel,
-                    "n_processes": args.n_processes
-                }
+            func = simulate_mutations
+            kwargs = {
+                "model_type": args.model,
+                "num_cultures": args.num_cultures,
+                "initial_population_size": args.initial_population_size,
+                "num_generations": args.num_generations,
+                "mutation_rate": args.mutation_rate,
+                "use_parallel": args.use_parallel,
+                "n_processes": args.n_processes
+            }
+            
+            if args.model == "combined":
+                kwargs["induced_mutation_rate"] = args.induced_mutation_rate
             
             # Run with profiling (handle the case if parallel processing is used)
             if args.use_parallel:
                 # Can't profile with parallel processing due to pickling issues
                 logger.warning("Cannot profile with parallel processing. Running without profiling.")
-                result = func(**kwargs)
-                survivors_list, _ = result
+                result, _ = func(**kwargs)
+                survivors_list = result
             else:
                 # Run with profiling for sequential processing
                 (survivors_list, _), profiler = run_profiling(func, **kwargs)
                 save_profiling_results(profiler, args.results_path, f"{args.model}_profile")
             
             # Continue with analysis and visualization
-            stats = analyze_results(survivors_list, args.model)[0]
+            stats, _ = analyze_results(survivors_list, args.model)
             create_visualizations(survivors_list, args.model, args.results_path)
-            
-            # Try to use the new visualization functions if they exist
-            try:
-                create_visualizations(survivors_list, args.model, args.results_path)
-            except Exception as e:
-                logger.warning(f"Could not create improved visualizations: {str(e)}")
             
             # Log results
             for key, value in stats.items():
@@ -2071,73 +1202,60 @@ def main():
             print(f"Cultures with zero resistant organisms: {stats['zero_resistant_percent']:.2f}%")
     
     elif args.model == "all":
-        # Fix for the pickling error in multiprocessing
-        if args.use_parallel:
-            # Set a flag to indicate functions should not use decorators
-            os.environ["NO_TIMING_DECORATOR"] = "1"
-            
         # Run all models and compare them
-        result_tuple, elapsed_time = run_all_models(args)
-        results, stats, times = result_tuple
+        results, stats, times = run_all_models(args)
         
         # Print summary to console
         print("\nSummary of Model Comparison:")
         print("-" * 40)
         for model in results.keys():
             model_stats = stats[model]
+            vmr = model_stats['variance'] / model_stats['mean'] if model_stats['mean'] > 0 else 0
+            
             print(f"{model.capitalize()} Model:")
             print(f"  Mean # survivors: {model_stats['mean']:.2f}")
             print(f"  Variance: {model_stats['variance']:.2f}")
             print(f"  Coefficient of Variation: {model_stats['coefficient_of_variation']:.2f}")
-            
-            # Calculate and display variance-to-mean ratio for Luria-Delbrück analysis
-            vmr = model_stats['variance'] / model_stats['mean'] if model_stats['mean'] > 0 else 0
             print(f"  Variance-to-Mean Ratio: {vmr:.2f}")
             
-            if 'model' in times:
+            if model in times:
                 print(f"  Simulation time: {times[model]:.2f} seconds")
             print("-" * 40)
+        
+        # Compare random vs induced VMR
+        if 'random' in stats and 'induced' in stats:
+            random_vmr = stats['random']['variance'] / stats['random']['mean'] if stats['random']['mean'] > 0 else 0
+            induced_vmr = stats['induced']['variance'] / stats['induced']['mean'] if stats['induced']['mean'] > 0 else 0
+            vmr_ratio = random_vmr / induced_vmr if induced_vmr > 0 else 0
+            
+            print(f"\nRandom/Induced VMR ratio: {vmr_ratio:.2f}")
+            if random_vmr > induced_vmr:
+                print("✓ Results support the Luria-Delbrück hypothesis")
+            else:
+                print("✗ Results do not clearly support the Luria-Delbrück hypothesis")
         
         # Indicate where results are saved
         print(f"\nDetailed results and visualizations saved to:")
         print(f"  {args.results_path}")
         
-        # Reset the environment variable
-        if "NO_TIMING_DECORATOR" in os.environ:
-            del os.environ["NO_TIMING_DECORATOR"]
-        
     else:
         # Run a single model
         logger.info(f"Running {args.model} mutation model simulation...")
         
-        if args.model == "random":
-            survivors_list, elapsed_time = simulate_random_mutations(
-                num_cultures=args.num_cultures,
-                initial_population_size=args.initial_population_size,
-                num_generations=args.num_generations,
-                mutation_rate=args.mutation_rate,
-                use_parallel=args.use_parallel,
-                n_processes=args.n_processes
-            )
-        elif args.model == "induced":
-            survivors_list, elapsed_time = simulate_induced_mutations(
-                num_cultures=args.num_cultures,
-                initial_population_size=args.initial_population_size,
-                num_generations=args.num_generations,
-                mutation_rate=args.mutation_rate,
-                use_parallel=args.use_parallel,
-                n_processes=args.n_processes
-            )
-        else:  # "combined"
-            survivors_list, elapsed_time = simulate_combined_mutations(
-                num_cultures=args.num_cultures,
-                initial_population_size=args.initial_population_size,
-                num_generations=args.num_generations,
-                random_mut_rate=args.mutation_rate,
-                induced_mut_rate=args.induced_mutation_rate,
-                use_parallel=args.use_parallel,
-                n_processes=args.n_processes
-            )
+        kwargs = {
+            "model_type": args.model,
+            "num_cultures": args.num_cultures,
+            "initial_population_size": args.initial_population_size,
+            "num_generations": args.num_generations,
+            "mutation_rate": args.mutation_rate,
+            "use_parallel": args.use_parallel,
+            "n_processes": args.n_processes
+        }
+        
+        if args.model == "combined":
+            kwargs["induced_mutation_rate"] = args.induced_mutation_rate
+            
+        survivors_list, elapsed_time = simulate_mutations(**kwargs)
         
         # Log completion of simulation
         logger.info(f"Simulation completed successfully in {elapsed_time:.2f} seconds")
@@ -2173,15 +1291,8 @@ def main():
         logger.info("Creating visualizations...")
         vis_path, vis_time = create_visualizations(survivors_list, args.model, args.results_path)
         if vis_path:
-            print(f"Standard visualizations saved to: {vis_path}")
+            print(f"Visualizations saved to: {vis_path}")
             print(f"Visualization time: {vis_time:.2f} seconds")
-        
-        # Try to use the new visualization functions if they exist
-        try:
-            improved_vis_path, improved_vis_time = create_visualizations(survivors_list, args.model, args.results_path)
-            print(f"Improved Luria-Delbrück visualizations saved to: {improved_vis_path}")
-        except Exception as e:
-            logger.warning(f"Could not create improved visualizations: {str(e)}")
         
         # Create time summary
         elapsed_times = {
@@ -2208,18 +1319,5 @@ def main():
     logger.info("Analysis complete.")
     print(f"\nAll output files saved to: {args.results_path}")
     
-#######################################################################
-# Entry point
-#######################################################################
 if __name__ == "__main__":
     main()
-
-
-#######################################################################
-# Example usage
-#######################################################################
-# python main.py --model random --num_cultures 1000 --initial_population_size 10 --num_generations 5 --mutation_rate 0.01 --Results_path results --log_level INFO --use_parallel
-# python main.py --model induced --num_cultures 1000 --initial_population_size 10 --num_generations 5 --mutation_rate 0.01 --Results_path results --log_level INFO --use_parallel
-# python main.py --model combined --num_cultures 1000 --initial_population_size 10 --num_generations 5 --mutation_rate 0.01 --induced_mutation_rate 0.01 --Results_path results --log_level INFO --use_parallel
-# python main.py --model all --num_cultures 1000 --initial_population_size 10 --num_generations 5 --mutation_rate 0.01 --induced_mutation_rate 0.01 --Results_path results --log_level INFO --use_parallel
-# python main.py --model all --num_cultures 1000 --initial_population_size 10 --num_generations 5 --mutation_rate 0.01 --induced_mutation_rate 0.01 --Results_path results --log_level INFO --profile
