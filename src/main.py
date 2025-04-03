@@ -457,7 +457,8 @@ def create_visualizations(survivors_list, model_name, results_path):
         
         # 4. Probability density function with theoretical fit (bottom right)
         plt.subplot(2, 2, 4)
-        sns.kdeplot(survivors_list, color='purple', label="Empirical distribution", linewidth=2)
+        sns.kdeplot(survivors_list, color='purple', label="Empirical distribution", 
+            linewidth=2, bw_adjust=2)  # Increase bw_adjust for more smoothing
         
         # Add theoretical distribution
         if model_name == "random":
@@ -589,8 +590,8 @@ def create_visualizations(survivors_list, model_name, results_path):
             return save_path
         
         # Plot both empirical and theoretical distributions
-        sns.kdeplot(survivors_list, color='blue', linewidth=3, label=f"{model_name.capitalize()} Model")
-        sns.kdeplot(theoretical_data, color='red', linewidth=2, linestyle='--', label="Theoretical Distribution")
+        sns.kdeplot(survivors_list, color='blue', linewidth=3, label=f"{model_name.capitalize()} Model" , bw_adjust=2)
+        sns.kdeplot(theoretical_data, color='red', linewidth=2, linestyle='--', label="Theoretical Distribution" , bw_adjust=2)
         plt.xlabel("Number of Resistant Survivors", fontsize=14)
         plt.ylabel("Probability Density", fontsize=14)
         plt.legend()

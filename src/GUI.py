@@ -304,7 +304,7 @@ class LuriaDelbrueckGUI:
             self.visualization_frame.update()
         except:
             pass
-        
+
     def set_defaults(self):
         """Set default values for all parameters"""
         self.model_var.set("random")
@@ -343,10 +343,8 @@ class LuriaDelbrueckGUI:
         """Enable/disable fields based on selected model"""
         model = self.model_var.get()
         
-        if model == "combined" or model == "all":
-            self.induced_rate_entry.config(state="normal")
-        else:
-            self.induced_rate_entry.config(state="disabled")
+        self.induced_rate_entry.config(state="normal")
+
 
     def toggle_optimal_params(self):
         """Set optimal parameters for Luria-Delbrück demonstration"""
@@ -1025,10 +1023,9 @@ class LuriaDelbrueckGUI:
             explanation = f"Theoretical log-normal distribution has VMR = {vmr_theo:.2f}\n"
             explanation += f"Empirical data has VMR = {vmr_actual:.2f}\n"
             explanation += "Luria-Delbrück distributions typically have VMR > 1"
-            
             ax.text(0.05, 0.05, explanation, transform=ax.transAxes, fontsize=10,
                     verticalalignment='bottom', horizontalalignment='left',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+                    bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
         
         self.fig.tight_layout()
 
